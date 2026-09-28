@@ -37,7 +37,7 @@ DESCRIPTIONS = {
         "Numbers follow CUDA_VISIBLE_DEVICES when it is set."
     ),
 }
-HELP_JS = Path(__file__).with_name("assets").joinpath("help.js").read_text()
+HELP_JS = Path(__file__).with_name("assets").joinpath("help.js").read_text(encoding="utf-8")
 
 
 def option_label(label: str, *, context: str = "edit") -> str:

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import errno
-import fcntl
 import hashlib
 import json
 import os
 import shutil
+import stat
 import time
 import uuid
 from contextlib import AbstractContextManager, contextmanager
@@ -27,23 +27,35 @@ def resolve_output_path(path: str | Path) -> Path:
 
 @contextmanager
 def lock_output(path: Path):
-    """Reserve an output through a stable, writable sidecar file.
+    """Hold a nonblocking exclusive lock on a persistent sidecar file.
 
-    Keep the empty lock file outside the output directory and never unlink it: replacing
-    its inode could let concurrent writers acquire different locks. The OS
-    releases the lock on process exit, including SIGKILL.
+    Never unlink the sidecar: replacing it could let concurrent writers acquire
+    different locks. Closing the file or exiting the process releases the lock.
     """
 
     lock_path = path.with_name(f".{path.name}.lock")
-    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o666)
-    try:
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    with os.fdopen(os.open(lock_path, flags, 0o666), "r+b", buffering=0) as lock_file:
+        descriptor = lock_file.fileno()
+        # Reject symlinks and replaced files even when O_NOFOLLOW is unavailable.
+        entry = lock_path.stat(follow_symlinks=False)
+        if not stat.S_ISREG(entry.st_mode) or not os.path.samestat(entry, os.fstat(descriptor)):
+            raise FourDAnyoneError(f"Output lock must be a regular file: {lock_path}.")
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
+            if os.name == "nt":
+                import msvcrt
+
+                # A newly opened descriptor starts at byte zero, even in an empty file.
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                raise
             raise FourDAnyoneError(f"Another inference run is using {path}.") from exc
         yield
-    finally:
-        os.close(descriptor)
 
 
 def sha256_file(path: str | Path, *, chunk_size: int = 8 * 1024 * 1024) -> str:

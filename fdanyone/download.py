@@ -109,8 +109,29 @@ def _ensure_link(source: Path, destination: Path) -> None:
             f"GVHMR asset location is occupied by an unrelated file: {destination}. "
             f"Move it away so the downloaded {source.name} can be linked."
         )
-    relative = os.path.relpath(source, start=destination.parent)
-    destination.symlink_to(relative)
+    if os.name == "nt":
+        # Hardlinks need no Developer Mode or elevation and do not duplicate
+        # large checkpoints. They also preserve the samefile identity above.
+        try:
+            destination.hardlink_to(source)
+            return
+        except OSError:
+            pass
+    try:
+        target = os.path.relpath(source, start=destination.parent)
+    except ValueError:
+        # relpath cannot cross Windows drives; a symlink can use an absolute path.
+        target = str(source)
+    try:
+        destination.symlink_to(target)
+    except OSError as exc:
+        if os.name != "nt":
+            raise
+        raise AssetError(
+            f"Could not link GVHMR asset {source} to {destination}. "
+            "Keep the model directory and GVHMR checkout on the same drive for hardlinks, "
+            "or enable Windows Developer Mode for symbolic links."
+        ) from exc
 
 
 def create_classic_gvhmr_links(
@@ -272,12 +293,31 @@ def install_smplx(
 
     target = Path(model_dir).expanduser().resolve() / SMPLX_MODEL
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.parent / f".{target.name}.download-{os.getpid()}"
-    try:
+    link_relative = next(link for model, link in GVHMR_LINKS if model == SMPLX_MODEL)
+    link = Path(gvhmr_root).expanduser().resolve() / link_relative
+    previous_link = None
+    if link.exists() and not link.is_symlink():
+        if not target.is_file() or not link.samefile(target):
+            raise AssetError(f"GVHMR asset location is occupied by an unrelated file: {link}.")
+        previous_link = link.stat(follow_symlinks=False)
+
+    with tempfile.TemporaryDirectory(prefix=f".{target.name}.download-", dir=target.parent) as staging:
+        temporary = Path(staging) / target.name
+        staged_link = Path(staging) / "gvhmr-link.npz"
         _copy_model_from_source(source, temporary)
+        if previous_link is not None:
+            # Atomic replacement creates a new inode. Stage another name for it
+            # so a verified existing hardlink can be refreshed without copying.
+            staged_link.hardlink_to(temporary)
         temporary.replace(target)
-    finally:
-        temporary.unlink(missing_ok=True)
+        if previous_link is not None:
+            try:
+                unchanged = os.path.samestat(previous_link, link.stat(follow_symlinks=False))
+            except FileNotFoundError:
+                unchanged = False
+            if not unchanged:
+                raise AssetError(f"GVHMR asset location changed during SMPL-X installation: {link}.")
+            staged_link.replace(link)
     create_classic_gvhmr_links(model_dir, gvhmr_root, require_models=False, require_smplx=True)
     return target
 

@@ -22,7 +22,7 @@ _LOCK = threading.Lock()
 
 def file_url(path: Path | str, *, revision: str | None = None) -> str:
     """Relative to the mounted Space, including deployments behind a path prefix."""
-    url = "./gradio_api/file=" + quote(str(Path(path).resolve()), safe="/")
+    url = "./gradio_api/file=" + quote(Path(path).resolve().as_posix(), safe="/")
     return url + "?v=" + quote(revision, safe="") if revision else url
 
 
@@ -63,7 +63,7 @@ def prepare_web_assets(cache_dir: Path) -> dict:
         if not destination.is_file():
             directory.mkdir(parents=True, exist_ok=True)
             package = Path(gradio_rerun.__file__).parent / "templates/component/index.js"
-            match = re.search(r"data:application/wasm;base64,([A-Za-z0-9+/=]+)", package.read_text())
+            match = re.search(r"data:application/wasm;base64,([A-Za-z0-9+/=]+)", package.read_text(encoding="utf-8"))
             if match is None:
                 raise FourDAnyoneError(
                     "Cannot locate the installed Rerun viewer runtime. Reinstall requirements-gui.txt."

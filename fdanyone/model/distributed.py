@@ -20,7 +20,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
-from fdanyone.errors import FourDAnyoneError
+from fdanyone.errors import ConfigurationError, FourDAnyoneError
 from fdanyone.model.routing import CameraGroup, Routes, StepGroups, validate_routes
 
 if TYPE_CHECKING:
@@ -78,6 +78,18 @@ def select_worker_devices(devices: Sequence[str], num_groups: int) -> tuple[str,
     if not devices:
         raise ValueError("At least one candidate GPU is required.")
     return tuple(devices[: worker_count_for_groups(num_groups, len(devices))])
+
+
+def require_nccl() -> None:
+    """Reject unsupported distributed denoising before preparing worker inputs."""
+
+    import torch.distributed as dist
+
+    if not (dist.is_available() and dist.is_nccl_available()):
+        raise ConfigurationError(
+            "Multi-GPU target denoising requires NCCL. "
+            "Use --gpu_ids=[0] on native Windows, or an NCCL-enabled PyTorch build on Linux or WSL2."
+        )
 
 
 def group_waves(groups: Sequence[CameraGroup], num_workers: int) -> tuple[StepGroups, ...]:
@@ -354,8 +366,7 @@ def denoise_targets_distributed(
     devices = tuple(devices)
     if len(devices) < 2:
         raise ValueError("Distributed denoising requires at least two GPUs.")
-    if not torch.distributed.is_available() or not torch.distributed.is_nccl_available():
-        raise FourDAnyoneError("Multi-GPU inference requires a PyTorch build with NCCL support.")
+    require_nccl()
     validate_routes(routes, int(initial_latents.shape[0]))
     if len(routes) != denoising_profile.num_inference_steps:
         raise ValueError(

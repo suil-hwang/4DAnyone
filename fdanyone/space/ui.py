@@ -91,8 +91,8 @@ def build_space(manager: JobManager) -> gr.Blocks:
                         )
                         delete = gr.HTML(
                             value=None,
-                            html_template=(ASSETS / "delete.html").read_text(),
-                            js_on_load=(ASSETS / "delete.js").read_text(),
+                            html_template=(ASSETS / "delete.html").read_text(encoding="utf-8"),
+                            js_on_load=(ASSETS / "delete.js").read_text(encoding="utf-8"),
                             apply_default_css=False,
                             visible=False,
                             min_width=0,

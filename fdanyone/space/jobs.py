@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import io
 import json
 import os
 import signal
@@ -11,7 +12,7 @@ import sys
 import threading
 import time
 import uuid
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -29,30 +30,149 @@ FINISHED = {"complete", "failed", "cancelled"}
 REPOSITORY = Path(__file__).resolve().parents[2]
 
 
-@dataclass
-class Job:
-    token: str
-    directory: Path
-    output_dir: Path
-    options: dict
-    state: str = "queued"
-    message: str = "Preparing Inference"
-    started: float = field(default_factory=time.monotonic)
-    cancel_event: threading.Event = field(default_factory=threading.Event)
-    future: concurrent.futures.Future | None = None
-    finished: float | None = None
-    monitor: RunMonitor = field(default_factory=RunMonitor)
+# The wrapper cannot launch user code until its parent assigns the Job Object.
+# Keeping the wrapper in the job also covers workers that outlive their parent.
+_WINDOWS_GATE = (
+    "import subprocess, sys; "
+    "token = sys.stdin.buffer.read(1); "
+    "sys.stdin.close(); "
+    "sys.exit(subprocess.call(sys.argv[1:], stdin=subprocess.DEVNULL, "
+    "creationflags=subprocess.CREATE_NO_WINDOW) if token == b'1' else 1)"
+)
 
-    def check_cancelled(self) -> None:
-        if self.cancel_event.is_set():
-            raise concurrent.futures.CancelledError
+
+class _WindowsJob:
+    """A non-inheritable Job Object whose last handle owns all descendants."""
+
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        class BasicLimits(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", ctypes.c_longlong),
+                ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class IoCounters(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_ulonglong) for name in (
+                "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+            )]
+
+        class ExtendedLimits(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", BasicLimits),
+                ("IoInfo", IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        self.api = ctypes.WinDLL("kernel32", use_last_error=True)
+        signatures = (
+            ("CreateJobObjectW", [ctypes.c_void_p, wintypes.LPCWSTR], wintypes.HANDLE),
+            ("SetInformationJobObject", [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD], wintypes.BOOL),
+            ("AssignProcessToJobObject", [wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
+            ("OpenProcess", [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+            ("CloseHandle", [wintypes.HANDLE], wintypes.BOOL),
+        )
+        for name, arguments, result in signatures:
+            function = getattr(self.api, name)
+            function.argtypes = arguments
+            function.restype = result
+        self.handle = self.api.CreateJobObjectW(None, None)
+        if not self.handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        limits = ExtendedLimits()
+        limits.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not self.api.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+            error = ctypes.WinError(ctypes.get_last_error())
+            self.close()
+            raise error
+
+    def assign(self, pid: int) -> None:
+        import ctypes
+
+        # PROCESS_SET_QUOTA | PROCESS_TERMINATE, as required by assignment.
+        process_handle = self.api.OpenProcess(0x0100 | 0x0001, False, pid)
+        if not process_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            if not self.api.AssignProcessToJobObject(self.handle, process_handle):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            self.api.CloseHandle(process_handle)
+
+    def close(self) -> None:
+        if self.handle:
+            self.api.CloseHandle(self.handle)
+            self.handle = None
+
+
+@contextmanager
+def worker_process(command, **options):
+    """Start a background command with closed stdin and owned descendants.
+
+    The yielded Popen supports ordinary polling and waiting. Leaving this
+    context also stops descendants after a worker has crashed or exited.
+    """
+
+    if os.name != "nt":
+        options["stdin"] = subprocess.DEVNULL
+        options["start_new_session"] = os.name == "posix"
+        with subprocess.Popen(command, **options) as process:
+            try:
+                yield process
+            finally:
+                stop_process_group(process)
+        return
+
+    options["stdin"] = subprocess.PIPE
+    options["start_new_session"] = False
+    options["creationflags"] = options.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
+    job = _WindowsJob()
+    try:
+        with subprocess.Popen([sys.executable, "-u", "-c", _WINDOWS_GATE, *command], **options) as process:
+            assigned = False
+            try:
+                job.assign(process.pid)
+                assigned = True
+                process._fdanyone_job = job
+                process.stdin.write("1" if isinstance(process.stdin, io.TextIOBase) else b"1")
+                process.stdin.close()
+                process.stdin = None
+                yield process
+            finally:
+                job.close()
+                # Until assignment succeeds the gate is the only owned process.
+                if not assigned and process.poll() is None:
+                    process.kill()
+    finally:
+        job.close()
 
 
 def stop_process_group(process: subprocess.Popen, grace_seconds: float = 3.0) -> None:
-    """Terminate this job's workers, including grandchildren, on POSIX hosts."""
+    """Stop an owned worker and descendants, including after its parent exits."""
 
+    if os.name == "nt":
+        job = getattr(process, "_fdanyone_job", None)
+        if job is None:
+            raise FourDAnyoneError("Windows workers must be started with worker_process to own their subprocesses.")
+        job.close()
+        process.wait()
+        return
     if os.name != "posix":
-        process.kill()
+        if process.poll() is None:
+            process.kill()
         process.wait()
         return
     try:
@@ -72,6 +192,25 @@ def stop_process_group(process: subprocess.Popen, grace_seconds: float = 3.0) ->
     with suppress(ProcessLookupError):
         os.killpg(process.pid, signal.SIGKILL)
     process.wait()
+
+
+@dataclass
+class Job:
+    token: str
+    directory: Path
+    output_dir: Path
+    options: dict
+    state: str = "queued"
+    message: str = "Preparing Inference"
+    started: float = field(default_factory=time.monotonic)
+    cancel_event: threading.Event = field(default_factory=threading.Event)
+    future: concurrent.futures.Future | None = None
+    finished: float | None = None
+    monitor: RunMonitor = field(default_factory=RunMonitor)
+
+    def check_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise concurrent.futures.CancelledError
 
 
 class JobManager:
@@ -299,39 +438,36 @@ class JobManager:
         return [sys.executable, "-u", "-m", "fdanyone.space.worker", str(request)]
 
     def _run(self, job: Job) -> None:
-        process = None
         try:
             job.check_cancelled()
             request = job.directory / "request.json"
             self._update(job, state="running", message="Starting inference")
             environment = os.environ.copy()
             environment["PYTHONPATH"] = str(REPOSITORY)
+            # ConsoleTail decodes this worker and its descendants as UTF-8.
+            environment["PYTHONIOENCODING"] = "utf-8"
             environment.pop("PYTHONHOME", None)
             # Avoid oversubscribing a shared workstation during video preparation.
             environment.setdefault("OMP_NUM_THREADS", "8")
-            with (job.directory / "inference.log").open("w") as log:
-                process = subprocess.Popen(
+            with (job.directory / "inference.log").open("w", encoding="utf-8") as log:
+                with worker_process(
                     self._command(request),
                     cwd=REPOSITORY,
                     env=environment,
-                    stdin=subprocess.DEVNULL,
                     stdout=log,
                     stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
-                while process.poll() is None:
-                    job.check_cancelled()
-                    try:
-                        status = json.loads((job.directory / "status.json").read_text())
-                    except (OSError, ValueError):
-                        pass
-                    else:
-                        self._status(job, status)
-                    job.cancel_event.wait(0.3)
+                ) as process:
+                    while process.poll() is None:
+                        job.check_cancelled()
+                        try:
+                            status = json.loads((job.directory / "status.json").read_text())
+                        except (OSError, ValueError):
+                            pass
+                        else:
+                            self._status(job, status)
+                        job.cancel_event.wait(0.3)
             job.check_cancelled()
             if process.returncode:
-                # A crashed parent may leave a model worker in its process group.
-                stop_process_group(process)
                 try:
                     status = json.loads((job.directory / "status.json").read_text())
                 except (OSError, ValueError, KeyError):
@@ -351,12 +487,8 @@ class JobManager:
             job.check_cancelled()
             self._update(job, state="complete", message="Complete")
         except concurrent.futures.CancelledError:
-            if process is not None:
-                stop_process_group(process)
             self._update(job, state="cancelled", message="Stopped. Resume inference or delete the saved output.")
         except Exception as exc:
-            if process is not None and process.poll() is None:
-                stop_process_group(process)
             self._update(job, state="failed", message=f"Failed: {exc}")
 
     def close(self) -> None:

@@ -24,6 +24,7 @@ class ConsoleTail:
         self.lines = deque(maxlen=MAX_LOG_LINES)
         self.line = ""
         self.escape = ""
+        self.carriage_return = False
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
 
     def read(self, path: Path, observe=lambda line: None) -> str:
@@ -41,6 +42,7 @@ class ConsoleTail:
                     self.offset = max(0, stat.st_size - MAX_READ_BYTES)
                     self.lines.clear()
                     self.line = self.escape = ""
+                    self.carriage_return = False
                     self.decoder.reset()
                     stream.seek(self.offset)
                 else:
@@ -59,11 +61,19 @@ class ConsoleTail:
                 observe(self.line)
                 if fragment == "\n":
                     self.lines.append(self.line)
-                self.line = ""
+                    self.line = ""
+                # Keep the line until LF commits it or new text replaces it.
+                self.carriage_return = fragment == "\r"
             elif fragment == "\b":
+                if self.carriage_return:
+                    self.line = ""
+                    self.carriage_return = False
                 self.line = self.line[:-1]
             else:
                 fragment = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", fragment)
+                if fragment and self.carriage_return:
+                    self.line = ""
+                    self.carriage_return = False
                 self.line = (self.line + fragment)[-MAX_LOG_BYTES:]
         observe(self.line)
         # Bound server memory as well as each browser update.
@@ -212,4 +222,4 @@ MONITOR_HTML = """
 </section>
 """
 
-MONITOR_JS = Path(__file__).with_name("assets").joinpath("monitor.js").read_text()
+MONITOR_JS = Path(__file__).with_name("assets").joinpath("monitor.js").read_text(encoding="utf-8")

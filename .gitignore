@@ -12,14 +12,9 @@ build/
 *.egg-info/
 
 # Runtime artifacts and large assets
-outputs/
-/data/fdanyone/
-/data/gvhmr/
-/data/nerfstudio/
-/data/ns_data/
-/data/.download/
+outputs/data/
 .download-*/
-/data/source/pexels/*.mp4
+data/
 /models/
 /checkpoints/
 *.safetensors
@@ -31,6 +26,8 @@ outputs/
 .env
 .env.*
 !.env.example
+.vscode/
+tmp/
 
 # Local agent state may contain private provenance.
 .claude/

@@ -1,0 +1,42 @@
+name: 4DAnyone
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - cuda-version=12.8
+  - pytorch-gpu
+  - torchvision
+  - av
+  - ffmpeg=*=gpl*
+  - colorlog
+  - einops
+  - ffmpeg-python
+  - fire
+  - huggingface_hub
+  - hydra-core
+  - hydra-zen
+  - imageio
+  - kornia
+  - numpy
+  - opencv
+  - pillow
+  - pytorch-lightning
+  - safetensors
+  - scipy
+  - timm
+  - tqdm
+  - transformers
+  - typing_extensions
+  - ultralytics=8.4.163
+  - yacs
+  - gradio=6.20.0
+  - rerun-sdk=0.37.1
+  - pip
+  - pip:
+      - sageattention==1.0.6
+      - triton-windows==3.8.0.post28; sys_platform == "win32"
+      - lapx
+      - smplx
+      - gradio-rerun==0.37.1
+      - ultralytics-platform==0.1.65

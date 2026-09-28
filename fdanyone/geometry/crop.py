@@ -54,10 +54,6 @@ def mask_bounds(masks: np.ndarray, threshold: float) -> tuple[int, int, int, int
     values = np.asarray(masks)
     if values.ndim == 4 and values.shape[1] == 1:
         values = values[:, 0]
-    if values.ndim not in (2, 3):
-        raise ValueError(f"Expected masks [H,W] or [F,H,W], got {values.shape}.")
-    if not 0 <= threshold <= 1:
-        raise ValueError("threshold must be in [0, 1].")
     cutoff = threshold * 255.0 if np.issubdtype(values.dtype, np.integer) else threshold
     union = values.max(axis=0) if values.ndim == 3 else values
     foreground = np.asarray(union > cutoff)
@@ -105,7 +101,6 @@ def crop_from_bounds(
 
     aspect_ratio = output_height / output_width
     crop_height = max(required_height, required_width * aspect_ratio)
-    crop_width = crop_height / aspect_ratio
     max_height = min(float(image_height), float(image_width) * aspect_ratio)
     crop_height = max(1, min(image_height, int(math.ceil(min(crop_height, max_height)))))
     crop_width = max(1, min(image_width, int(math.ceil(crop_height / aspect_ratio))))

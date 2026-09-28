@@ -20,7 +20,7 @@ import types
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from fdanyone.errors import AssetError, VideoContractError
 from fdanyone.motion.result import SMPL_PARAMETER_NAMES, MotionResult
@@ -62,12 +62,14 @@ def validate_gvhmr(root: str | Path) -> tuple[Path, str]:
     return path, revision
 
 
-def hydra_override(name: str, value: str | Path) -> str:
+def hydra_override(name: str, value: str | PurePath) -> str:
     """Quote a path for the internal GVHMR Hydra config."""
 
     if not name.isidentifier():
         raise ValueError(f"Invalid Hydra field name: {name!r}.")
-    return f"{name}={json.dumps(str(value), ensure_ascii=False)}"
+    # Hydra keeps JSON-escaped backslashes, which corrupts UNC path anchors.
+    text = value.as_posix() if isinstance(value, PurePath) else value
+    return f"{name}={json.dumps(text, ensure_ascii=False)}"
 
 
 def _full_frame_bbox_xyxy(width: int, height: int) -> tuple[float, float, float, float]:

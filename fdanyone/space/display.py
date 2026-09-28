@@ -27,4 +27,4 @@ DISPLAY_HTML = """
 </div>
 """
 
-DISPLAY_JS = Path(__file__).with_name("assets").joinpath("display.js").read_text()
+DISPLAY_JS = Path(__file__).with_name("assets").joinpath("display.js").read_text(encoding="utf-8")

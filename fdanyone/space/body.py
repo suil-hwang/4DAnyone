@@ -86,6 +86,8 @@ def load_body(motion_dir: Path, model_dir: Path, gvhmr_root: Path, cache_dir: Pa
     directory.mkdir(parents=True, exist_ok=True)
     destination = directory / "body.npz"
     if not destination.is_file():
+        from fdanyone.space.jobs import worker_process
+
         request = directory / "request.json"
         request.write_text(
             json.dumps(
@@ -100,27 +102,20 @@ def load_body(motion_dir: Path, model_dir: Path, gvhmr_root: Path, cache_dir: Pa
         environment = os.environ.copy()
         environment["CUDA_VISIBLE_DEVICES"] = ""
         environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        environment["PYTHONIOENCODING"] = "utf-8"
         environment.setdefault("OMP_NUM_THREADS", "8")
-        with (directory / "body.log").open("w") as log:
-            process = subprocess.Popen(
+        with (directory / "body.log").open("w", encoding="utf-8") as log:
+            with worker_process(
                 [sys.executable, "-m", "fdanyone.space.body", str(request)],
                 env=environment,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-            try:
+            ) as process:
                 while process.poll() is None:
                     check_cancelled()
                     time.sleep(0.1)
                 if process.returncode:
                     raise FourDAnyoneError(f"Body preview preparation failed. See {directory / 'body.log'}.")
-            finally:
-                if process.poll() is None:
-                    from fdanyone.space.jobs import stop_process_group
-
-                    stop_process_group(process)
     with np.load(destination, allow_pickle=False) as data:
         return {name: data[name] for name in data.files}
 

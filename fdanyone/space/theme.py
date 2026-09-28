@@ -95,12 +95,12 @@ THEME = gr.themes.Base(font=["Lato", "system-ui", "sans-serif"]).set(
 
 # Embed the project's small font files so localhost use needs no font CDN or extra route.
 _assets = Path(__file__).with_name("assets")
-_fonts = (_assets / "fonts.css").read_text()
+_fonts = (_assets / "fonts.css").read_text(encoding="utf-8")
 for _path in _assets.glob("*.woff2"):
     _encoded = base64.b64encode(_path.read_bytes()).decode("ascii")
     _fonts = _fonts.replace(f"../fonts/{_path.name}", f"data:font/woff2;base64,{_encoded}")
 CSS = (
     _fonts
     + f".gradio-container {{ --space-red: rgb{RED}; }}\n"
-    + "".join((_assets / name).read_text() for name in ("workbench.css", "display.css", "monitor.css"))
+    + "".join((_assets / name).read_text(encoding="utf-8") for name in ("workbench.css", "display.css", "monitor.css"))
 )

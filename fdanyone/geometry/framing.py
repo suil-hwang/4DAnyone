@@ -93,33 +93,7 @@ class ClipFraming:
 
 
 def _name_index(names: Sequence[str]) -> dict[str, int]:
-    normalized = [str(name).strip().lower().replace("_", "-") for name in names]
-    mapping = dict(zip(normalized, range(len(normalized)), strict=True))
-    if len(mapping) != len(normalized):
-        raise ValueError("Keypoint names must be unique after normalization.")
-    return mapping
-
-
-def _required_indices(names: Sequence[str]) -> dict[str, int]:
-    required = ["nose", "left-eye", "right-eye", "left-ear", "right-ear", "neck"]
-    for side in ("left", "right"):
-        required.extend(
-            f"{side}-{part}"
-            for part in (
-                "shoulder",
-                "hip",
-                "knee",
-                "ankle",
-                "big-toe-tip",
-                "small-toe-tip",
-                "heel",
-            )
-        )
-    mapping = _name_index(names)
-    missing = [name for name in required if name not in mapping]
-    if missing:
-        raise ValueError(f"Missing framing keypoints: {missing}.")
-    return {name: mapping[name] for name in required}
+    return {str(name).strip().lower().replace("_", "-"): index for index, name in enumerate(names)}
 
 
 def _sample_path(anchors: Sequence[np.ndarray], samples_per_segment: int) -> tuple[np.ndarray, np.ndarray]:
@@ -144,12 +118,9 @@ def anatomy_samples(
     names: Sequence[str],
     samples_per_segment: int = 8,
 ) -> tuple[np.ndarray, np.ndarray]:
+    """Sample both head-to-foot paths from named keypoints [frames,keypoints,3]."""
     points = np.asarray(keypoints, dtype=np.float64)
-    if points.ndim != 3 or points.shape[1:] != (len(names), 3) or not np.isfinite(points).all():
-        raise ValueError(f"Expected finite keypoints [frames,{len(names)},3], got {points.shape}.")
-    if samples_per_segment < 2:
-        raise ValueError("samples_per_segment must be at least two.")
-    ids = _required_indices(names)
+    ids = _name_index(names)
     face = np.mean(
         points[:, [ids[name] for name in ("nose", "left-eye", "right-eye", "left-ear", "right-ear")]], axis=1
     )
@@ -178,18 +149,9 @@ def anatomy_samples(
 
 
 def project_incam(points: np.ndarray, intrinsics: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Project camera-space points [frames,keypoints,3] with shared or per-frame K."""
     points = np.asarray(points, dtype=np.float64)
-    cameras = np.asarray(intrinsics, dtype=np.float64)
-    if points.ndim != 3 or points.shape[-1] != 3:
-        raise ValueError(f"Expected points [frames,keypoints,3], got {points.shape}.")
-    if cameras.shape == (3, 3):
-        cameras = np.broadcast_to(cameras, (points.shape[0], 3, 3))
-    if cameras.shape == (1, 3, 3):
-        cameras = np.broadcast_to(cameras, (points.shape[0], 3, 3))
-    if cameras.shape != (points.shape[0], 3, 3):
-        raise ValueError(f"Expected intrinsics [{points.shape[0]},3,3], got {cameras.shape}.")
-    if not np.isfinite(points).all() or not np.isfinite(cameras).all():
-        raise ValueError("Projection inputs must be finite.")
+    cameras = np.broadcast_to(np.asarray(intrinsics, dtype=np.float64), (points.shape[0], 3, 3))
     homogeneous = np.einsum("fij,fkj->fki", cameras, points)
     depths = points[..., 2]
     xy = homogeneous[..., :2] / np.maximum(homogeneous[..., 2:3], 1e-8)
@@ -201,28 +163,23 @@ def _inside(xy: np.ndarray, depths: np.ndarray, width: int, height: int) -> np.n
 
 
 def _mask_support(xy: np.ndarray, inside: np.ndarray, masks: np.ndarray) -> np.ndarray:
-    masks = np.asarray(masks)
-    if masks.ndim != 3 or masks.shape[0] != xy.shape[0]:
-        raise ValueError(f"Expected masks [frames,height,width], got {masks.shape}.")
     height, width = masks.shape[1:]
     patch_radius = max(3, int(round(min(width, height) * 0.005)))
     kernel = np.ones((2 * patch_radius + 1,) * 2, dtype=np.uint8)
     support = np.zeros_like(inside)
-    for frame_index, mask in enumerate(masks):
+    for frame_index in np.flatnonzero(inside.any(axis=1)):
+        mask = masks[frame_index]
         dilated = cv2.dilate((mask >= 64).astype(np.uint8), kernel)
         candidates = np.flatnonzero(inside[frame_index])
-        if candidates.size:
-            pixels = np.rint(xy[frame_index, candidates]).astype(np.int64)
-            pixels[:, 0] = np.clip(pixels[:, 0], 0, width - 1)
-            pixels[:, 1] = np.clip(pixels[:, 1], 0, height - 1)
-            support[frame_index, candidates] = dilated[pixels[:, 1], pixels[:, 0]] > 0
+        pixels = np.rint(xy[frame_index, candidates]).astype(np.int64)
+        pixels[:, 0] = np.clip(pixels[:, 0], 0, width - 1)
+        pixels[:, 1] = np.clip(pixels[:, 1], 0, height - 1)
+        support[frame_index, candidates] = dilated[pixels[:, 1], pixels[:, 0]] > 0
     return support
 
 
 def _torso_valid(vitpose: np.ndarray, width: int, height: int) -> np.ndarray:
     detector = np.asarray(vitpose, dtype=np.float64)
-    if detector.ndim != 3 or detector.shape[1:] != (17, 3):
-        raise ValueError(f"Expected VitPose [frames,17,3], got {detector.shape}.")
     valid = (
         (detector[..., 2] >= 0.3)
         & (detector[..., 0] >= 0)
@@ -286,11 +243,7 @@ def analyze_input_framing(
     masks: np.ndarray,
 ) -> InputFraming:
     masks = np.asarray(masks)
-    if masks.ndim != 3:
-        raise ValueError(f"Expected masks [frames,height,width], got {masks.shape}.")
     frame_count, height, width = masks.shape
-    if np.asarray(incam_keypoints).shape[0] != frame_count or np.asarray(vitpose).shape[0] != frame_count:
-        raise ValueError("Input-framing arrays do not share one frame count.")
 
     anatomy, coordinates = anatomy_samples(incam_keypoints, names)
     anatomy_xy, anatomy_depth = project_incam(anatomy, intrinsics)
@@ -320,7 +273,7 @@ def analyze_input_framing(
     torso_ratio = float(torso_valid.mean())
     alignment_score = 0.6 if alignment is None else float(np.clip(1.0 - alignment / 0.15, 0.0, 1.0))
     confidence = float(np.clip(0.45 * valid_ratio + 0.35 * torso_ratio + 0.20 * alignment_score, 0.0, 1.0))
-    bottom = float(np.percentile(bottoms[valid_frames], 20.0))
+    bottom, bottom_p50, bottom_p80 = map(float, np.percentile(bottoms[valid_frames], [20.0, 50.0, 80.0]))
     if bottom >= FULL_BODY_BOTTOM:
         label = "full_body"
     elif bottom >= HALF_BODY_BOTTOM:
@@ -331,8 +284,8 @@ def analyze_input_framing(
     return InputFraming(
         label=label,
         visible_body_bottom=round(bottom, 6),
-        visible_body_bottom_p50=round(float(np.percentile(bottoms[valid_frames], 50.0)), 6),
-        visible_body_bottom_p80=round(float(np.percentile(bottoms[valid_frames], 80.0)), 6),
+        visible_body_bottom_p50=round(bottom_p50, 6),
+        visible_body_bottom_p80=round(bottom_p80, 6),
         visible_height_ratio=round(float(np.percentile(finite_heights, 50.0)) if finite_heights.size else 0.0, 6),
         wrist_out_ratio_x=round(float(np.any(wrist_out_x, axis=1).mean()), 6),
         wrist_out_ratio_y=round(float(np.any(wrist_out_y, axis=1).mean()), 6),
@@ -366,6 +319,19 @@ def projected_axis_ratios(
     return ratios.max(axis=0)
 
 
+def _ratio_percentile(ratios: np.ndarray, percentile: float) -> float:
+    """Linear percentile preserving +inf for unprojectable frames."""
+    if np.isfinite(ratios).all():
+        return float(np.percentile(ratios, percentile))
+    ordered = np.sort(ratios)
+    rank = (len(ordered) - 1) * (percentile / 100.0)
+    lower, upper = ordered[int(np.floor(rank))], ordered[int(np.ceil(rank))]
+    if lower == upper:
+        return float(lower)
+    fraction = rank - np.floor(rank)
+    return float(lower * (1.0 - fraction) + upper * fraction)
+
+
 def _selected(points: np.ndarray, names: Sequence[str], *, exclude_hands: bool, exclude_fingers: bool) -> np.ndarray:
     excluded = _FINGER_TOKENS
     if exclude_hands:
@@ -386,38 +352,43 @@ def solve_radius(
     height_points = _selected(points, names, exclude_hands=True, exclude_fingers=True)
     width_points = _selected(points, names, exclude_hands=False, exclude_fingers=True)
 
-    def evaluate(radius: float) -> tuple[float, float, float]:
+    lower, upper = spec.min_radius, spec.max_radius
+    for radius, bound in ((lower, "min"), (upper, "max")):
         cameras = camera_factory(radius, spec.reference_target_height)
         heights = projected_axis_ratios(height_points, cameras, spec.reference_focal_normalized, axis=1)
         widths = projected_axis_ratios(
             width_points, cameras, spec.reference_focal_normalized, axis=0, axis_scale=aspect_ratio
         )
-        height = float(np.percentile(heights, spec.height_percentile))
-        width = float(np.percentile(widths, spec.width_percentile))
-        return max(height / spec.height_target_ratio, width / spec.width_target_ratio), height, width
-
-    def result(radius: float, values: tuple[float, float, float], bound: str | None) -> RadiusSolve:
-        _, height, width = values
-        limiting = "width" if width / spec.width_target_ratio > height / spec.height_target_ratio else "height"
-        return RadiusSolve(radius, height, width, bound, limiting)
-
-    lower_values = evaluate(spec.min_radius)
-    if lower_values[0] <= 1.0:
-        return result(spec.min_radius, lower_values, "min")
-    upper_values = evaluate(spec.max_radius)
-    if upper_values[0] > 1.0:
-        return result(spec.max_radius, upper_values, "max")
-    lower, upper, best = spec.min_radius, spec.max_radius, upper_values
-    for _ in range(24):
-        midpoint = (lower + upper) / 2
-        values = evaluate(midpoint)
-        if values[0] > 1.0:
-            lower = midpoint
-        else:
-            upper, best = midpoint, values
-        if values[0] <= 1.0 and abs(values[0] - 1.0) <= 1e-4:
+        height = _ratio_percentile(heights, spec.height_percentile)
+        width = _ratio_percentile(widths, spec.width_percentile)
+        score = max(height / spec.height_target_ratio, width / spec.width_target_ratio)
+        if (bound == "min" and score <= 1.0) or (bound == "max" and score > 1.0):
             break
-    return result(upper, best, None)
+    else:
+        # Neither bound was selected; upper is the feasible end of the bracket.
+        bound = None
+        best = height, width
+        for _ in range(24):
+            midpoint = (lower + upper) / 2
+            cameras = camera_factory(midpoint, spec.reference_target_height)
+            heights = projected_axis_ratios(height_points, cameras, spec.reference_focal_normalized, axis=1)
+            widths = projected_axis_ratios(
+                width_points, cameras, spec.reference_focal_normalized, axis=0, axis_scale=aspect_ratio
+            )
+            height = _ratio_percentile(heights, spec.height_percentile)
+            width = _ratio_percentile(widths, spec.width_percentile)
+            score = max(height / spec.height_target_ratio, width / spec.width_target_ratio)
+            if score > 1.0:
+                lower = midpoint
+            else:
+                upper, best = midpoint, (height, width)
+            if score <= 1.0 and abs(score - 1.0) <= 1e-4:
+                break
+        radius = upper
+        height, width = best
+
+    limiting = "width" if width / spec.width_target_ratio > height / spec.height_target_ratio else "height"
+    return RadiusSolve(radius, height, width, bound, limiting)
 
 
 def adaptive_thresholds(profile: InputFraming) -> AdaptiveThresholds:
@@ -453,7 +424,7 @@ def _visible_anatomy(
     samples, coordinates = anatomy_samples(points, names)
     core = samples[:, coordinates <= bottom + 1e-8]
     cutoff = _cutoff_points(samples, coordinates, bottom)
-    if not np.any(np.isclose(coordinates, bottom, atol=1e-8)):
+    if not np.any(np.isclose(coordinates, bottom, rtol=0.0, atol=1e-8)):
         core = np.concatenate([core, cutoff], axis=1)
     mapping = _name_index(names)
     arm_tokens = ("shoulder", "acromion", "elbow", "olecranon", "cubital-fossa", "wrist")
@@ -474,11 +445,11 @@ def _solve_focal(
     thresholds: AdaptiveThresholds,
     aspect_ratio: float,
     spec: FramingConfig,
-) -> tuple[FocalSolve, np.ndarray]:
+) -> FocalSolve:
     unit_heights = projected_axis_ratios(core, cameras, 1.0, axis=1)
     unit_widths = projected_axis_ratios(width_points, cameras, 1.0, axis=0, axis_scale=aspect_ratio)
-    unit_height = float(np.percentile(unit_heights, thresholds.height_percentile))
-    unit_width = float(np.percentile(unit_widths, thresholds.width_percentile))
+    unit_height = _ratio_percentile(unit_heights, thresholds.height_percentile)
+    unit_width = _ratio_percentile(unit_widths, thresholds.width_percentile)
     height_focal = thresholds.height_target_ratio / unit_height
     width_focal = thresholds.width_target_ratio / unit_width if unit_width > 0 else np.inf
     unconstrained = min(height_focal, width_focal)
@@ -490,15 +461,12 @@ def _solve_focal(
         if unconstrained > spec.max_focal_normalized
         else None
     )
-    return (
-        FocalSolve(
-            focal,
-            float(np.percentile(unit_heights * focal, thresholds.height_percentile)),
-            float(np.percentile(unit_widths * focal, thresholds.width_percentile)),
-            bound,
-            "width" if width_focal < height_focal else "height",
-        ),
-        unit_heights,
+    return FocalSolve(
+        focal,
+        _ratio_percentile(unit_heights * focal, thresholds.height_percentile),
+        _ratio_percentile(unit_widths * focal, thresholds.width_percentile),
+        bound,
+        "width" if width_focal < height_focal else "height",
     )
 
 
@@ -537,13 +505,14 @@ def solve_clip_framing(
     alignment = min(1.0, 2.0 * thresholds.closeup_strength)
     initial_target = spec.reference_target_height * (1.0 - alignment) + anatomical_target * alignment
 
-    def evaluate(target_height: float) -> tuple[FocalSolve, float]:
-        cameras = camera_factory(radius_result.radius, target_height)
-        focal, _ = _solve_focal(core, width_points, cameras, thresholds, aspect_ratio, spec)
-        return focal, _cutoff_ratio(cutoff, cameras, focal.focal_normalized, spec.cutoff_percentile)
-
     lower, upper = initial_target - 0.5, initial_target + 0.5
-    lower_value, upper_value = evaluate(lower), evaluate(upper)
+    endpoint_values = []
+    for target in (lower, upper):
+        cameras = camera_factory(radius_result.radius, target)
+        focal = _solve_focal(core, width_points, cameras, thresholds, aspect_ratio, spec)
+        cutoff_ratio = _cutoff_ratio(cutoff, cameras, focal.focal_normalized, spec.cutoff_percentile)
+        endpoint_values.append((focal, cutoff_ratio))
+    lower_value, upper_value = endpoint_values
     increasing = upper_value[1] > lower_value[1]
     if not min(lower_value[1], upper_value[1]) <= spec.cutoff_target_ratio <= max(lower_value[1], upper_value[1]):
         if abs(lower_value[1] - spec.cutoff_target_ratio) <= abs(upper_value[1] - spec.cutoff_target_ratio):
@@ -554,8 +523,11 @@ def solve_clip_framing(
         target, value, target_bound = lower, lower_value, None
         for _ in range(20):
             midpoint = (lower + upper) / 2
-            candidate = evaluate(midpoint)
-            error = candidate[1] - spec.cutoff_target_ratio
+            cameras = camera_factory(radius_result.radius, midpoint)
+            focal = _solve_focal(core, width_points, cameras, thresholds, aspect_ratio, spec)
+            cutoff_ratio = _cutoff_ratio(cutoff, cameras, focal.focal_normalized, spec.cutoff_percentile)
+            candidate = focal, cutoff_ratio
+            error = cutoff_ratio - spec.cutoff_target_ratio
             if abs(error) < abs(value[1] - spec.cutoff_target_ratio):
                 target, value = midpoint, candidate
             if abs(error) <= 1e-4:
@@ -565,15 +537,16 @@ def solve_clip_framing(
             else:
                 upper = midpoint
 
+    focal, cutoff_ratio = value
     return ClipFraming(
         radius_result.radius,
         target,
-        value[0].focal_normalized,
+        focal.focal_normalized,
         profile,
         True,
         radius_result,
         thresholds,
-        value[0],
-        value[1],
+        focal,
+        cutoff_ratio,
         target_bound,
     )

@@ -10,10 +10,10 @@ from fdanyone.errors import ConfigurationError
 PITCH_PRESETS = ((15,), (15, 0), (30, 15, 0), (30, 15, 0, -15), (45, 30, 15, 0, -15))
 MAX_LAYERS = len(PITCH_PRESETS)
 _ASSETS = Path(__file__).with_name("assets")
-SLIDER_HTML = (_ASSETS / "slider.html").read_text()
-SLIDER_JS = (_ASSETS / "slider.js").read_text()
-PITCHES_HTML = (_ASSETS / "pitches.html").read_text()
-PITCHES_JS = (_ASSETS / "pitches.js").read_text()
+SLIDER_HTML = (_ASSETS / "slider.html").read_text(encoding="utf-8")
+SLIDER_JS = (_ASSETS / "slider.js").read_text(encoding="utf-8")
+PITCHES_HTML = (_ASSETS / "pitches.html").read_text(encoding="utf-8")
+PITCHES_JS = (_ASSETS / "pitches.js").read_text(encoding="utf-8")
 
 
 def view_counts(num_layers: int) -> tuple[int, ...]:
