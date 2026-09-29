@@ -23,7 +23,7 @@ def denoise_group(
 
     import torch
 
-    timestep = denoiser.scheduler.timesteps[step_index]
+    timestep = denoiser.timesteps[step_index]
     batched_timestep = timestep.unsqueeze(0).to(dtype=denoiser.dtype, device=latents.device)
     batched_timestep = torch.cat([batched_timestep] * latents.shape[0], dim=0)
     prediction = denoiser.model(
@@ -34,4 +34,4 @@ def denoise_group(
         null_pose_feature=null_pose_feature,
         context=context,
     )
-    return denoiser.scheduler.step(prediction, timestep, latents)
+    return latents + prediction * denoiser.sigma_deltas[step_index]

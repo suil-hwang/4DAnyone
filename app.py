@@ -19,7 +19,7 @@ def launch(
     gvhmr_root: str = "third_party/GVHMR",
     cache_dir: str = "outputs/space",
     gpu_ids: list[int] | None = None,
-    attention_backend: str = "auto",
+    attention_backend: str = "sageattention",
     server_name: str = "127.0.0.1",
     server_port: int = 7860,
 ) -> None:
@@ -36,7 +36,7 @@ def launch(
         cache_dir: Logs, body geometry, and scene recordings.
         gpu_ids: Initially selected GPU IDs, e.g. [0] or [0,1].
             Omit to select all CUDA-visible GPUs, as in the CLI.
-        attention_backend: auto, sdpa, sageattention, or flash_attn_3.
+        attention_backend: sageattention (default), sdpa, or auto.
         server_name: Server bind address.
         server_port: Server port, from 1 to 65535.
     """

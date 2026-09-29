@@ -29,7 +29,7 @@ class SpaceConfig:
     model_dir: Path
     gvhmr_root: Path
     gpu_ids: tuple[int, ...] | None = None
-    attention_backend: str = "auto"
+    attention_backend: str = "sageattention"
     video_path: Path | None = None
 
 

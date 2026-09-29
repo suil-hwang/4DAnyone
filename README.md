@@ -33,7 +33,7 @@ conda activate 4danyone
 pip install -r requirements.txt
 ```
 
-For faster inference, optionally install [FlashAttention-3](https://github.com/Dao-AILab/flash-attention/tree/main/hopper) or [SageAttention](https://github.com/thu-ml/SageAttention). The installed backend is enabled automatically.
+[SageAttention](https://github.com/thu-ml/SageAttention) is installed with the requirements and is the default attention backend. Use `--attention_backend sdpa` for PyTorch SDPA, or `--attention_backend auto` to prefer SageAttention and fall back to SDPA when it is unavailable. Native Windows users can install the supplied `environment.yml`, which includes `triton-windows` for SageAttention.
 
 Missing models and examples are downloaded automatically on first use. You can also download them manually:
 

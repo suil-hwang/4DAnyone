@@ -19,13 +19,6 @@ from einops import rearrange, repeat
 from fdanyone.attention import resolve_attention_backend
 
 try:
-    import flash_attn_interface
-
-    FLASH_ATTN_3_AVAILABLE = True
-except (ImportError, OSError, RuntimeError):
-    FLASH_ATTN_3_AVAILABLE = False
-
-try:
     from sageattention import sageattn
 
     SAGE_ATTN_AVAILABLE = True
@@ -57,11 +50,10 @@ RMS_NORM_FP32_TEMPORARY_BUDGET_BYTES = 1536 * 1024**2
 NORM_MODULATION_FP32_TEMPORARY_BUDGET_BYTES = 1536 * 1024**2
 
 
-def get_attention_backend(backend: str = "auto") -> str:
+def get_attention_backend(backend: str = "sageattention") -> str:
     """Resolve a requested backend against the installed implementations."""
 
     availability = {
-        "flash_attn_3": FLASH_ATTN_3_AVAILABLE,
         "sageattention": SAGE_ATTN_AVAILABLE,
         "sdpa": True,
     }
@@ -71,14 +63,6 @@ def get_attention_backend(backend: str = "auto") -> str:
 def attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, backend: str) -> torch.Tensor:
     """Evaluate attention with the owning model's resolved backend."""
 
-    if backend == "flash_attn_3":
-        q = rearrange(q, "b s (n d) -> b s n d", n=num_heads)
-        k = rearrange(k, "b s (n d) -> b s n d", n=num_heads)
-        v = rearrange(v, "b s (n d) -> b s n d", n=num_heads)
-        output = flash_attn_interface.flash_attn_func(q, k, v)
-        if isinstance(output, tuple):
-            output = output[0]
-        return rearrange(output, "b s n d -> b s (n d)", n=num_heads)
     q = rearrange(q, "b s (n d) -> b n s d", n=num_heads)
     k = rearrange(k, "b s (n d) -> b n s d", n=num_heads)
     v = rearrange(v, "b s (n d) -> b n s d", n=num_heads)
@@ -438,7 +422,7 @@ class ViewPackEmbedding(nn.Module):
 class FourDAnyoneDiT(nn.Module):
     """Exact immutable inference graph for the released model checkpoint."""
 
-    def __init__(self, *, attention_backend: str = "auto") -> None:
+    def __init__(self, *, attention_backend: str = "sageattention") -> None:
         super().__init__()
         self.attention_backend = get_attention_backend(attention_backend)
         self.patch_embedding = nn.Conv3d(

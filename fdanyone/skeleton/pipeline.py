@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -34,6 +35,9 @@ from fdanyone.video import CanonicalClip, iter_rgb_video, write_lossless_video, 
 from fdanyone.views import ViewPlan
 
 LOGGER = logging.getLogger("fdanyone")
+# Drawing holds the GIL, so a few camera threads mainly overlap it with x264
+# encoding. Each video is encoded independently and stays byte-identical.
+SKELETON_RENDER_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -439,9 +443,14 @@ def build_skeleton_conditioning(
             preset=INFERENCE.h264_preset,
         )
 
-    target_paths = tuple(
-        render_skeleton(camera, skeleton_root / f"{camera.camera_id:02d}.mp4") for camera in raw_target_cameras
-    )
+    with ThreadPoolExecutor(max_workers=SKELETON_RENDER_WORKERS) as pool:
+        target_paths = tuple(
+            pool.map(
+                render_skeleton,
+                raw_target_cameras,
+                [skeleton_root / f"{camera.camera_id:02d}.mp4" for camera in raw_target_cameras],
+            )
+        )
     cropped_target_cameras = tuple(_cropped_camera(camera, target_crop) for camera in raw_target_cameras)
 
     if not view_plan.enable_rcp:
@@ -466,9 +475,14 @@ def build_skeleton_conditioning(
         raw_rcp_cameras = tuple(canonical_cameras[camera_id] for camera_id in view_plan.rcp_camera_ids)
         rcp_root = root / "rcp_goliath40"
         rcp_root.mkdir()
-        rcp_paths = tuple(
-            render_skeleton(camera, rcp_root / f"{camera.camera_id:02d}.mp4") for camera in raw_rcp_cameras
-        )
+        with ThreadPoolExecutor(max_workers=SKELETON_RENDER_WORKERS) as pool:
+            rcp_paths = tuple(
+                pool.map(
+                    render_skeleton,
+                    raw_rcp_cameras,
+                    [rcp_root / f"{camera.camera_id:02d}.mp4" for camera in raw_rcp_cameras],
+                )
+            )
         cropped_rcp_cameras = tuple(_cropped_camera(camera, target_crop) for camera in raw_rcp_cameras)
 
     def camera_records(

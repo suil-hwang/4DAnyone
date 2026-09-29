@@ -233,7 +233,7 @@ def run_pipeline(
     if len(select_worker_devices(devices, view_plan.num_groups)) > 1:
         require_nccl()
 
-    from fdanyone.vendor.diffsynth.models.wan_video_dit import get_attention_backend
+    from fdanyone.model.dit import get_attention_backend
 
     # Resolve once, before downloading assets or preparing conditioning. Every
     # DiT, including spawned replicas, receives this concrete backend.

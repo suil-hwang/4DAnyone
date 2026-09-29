@@ -28,6 +28,7 @@ data/
 !.env.example
 .vscode/
 tmp/
+paper/
 
 # Local agent state may contain private provenance.
 .claude/

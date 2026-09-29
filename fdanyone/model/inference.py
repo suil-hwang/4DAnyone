@@ -168,7 +168,7 @@ def _denoise_rcp(
     null_pose_feature = pose_features.null_features
 
     with torch.inference_mode(), _bf16_autocast():
-        for step_index, _ in enumerate(tqdm(denoiser.scheduler.timesteps, desc=f"RCP 1-to-{len(camera_ids)}")):
+        for step_index, _ in enumerate(tqdm(denoiser.timesteps, desc=f"RCP 1-to-{len(camera_ids)}")):
             latents = denoise_group(
                 denoiser,
                 latents,

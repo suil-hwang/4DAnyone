@@ -40,19 +40,20 @@ The adaptive preprocessing path downloads the pinned BiRefNet configuration, inf
 
 The companion Hugging Face repository distributes 20 modified 121-frame excerpts for CLI inference and 4DAnyone Space. They are installed under the location above on demand. Their filenames, source videos, extraction ranges, and checksums are recorded in the pinned [Pexels asset manifest](https://huggingface.co/AntResearch/4DAnyone/blob/4c80e87b805a5f8461cf339cdbe2fb4249e585aa/data/source/pexels/README.md). Pexels permits its media to be used and modified for free and does not require attribution. The source links are retained for provenance and creator credit.
 
-## DiffSynth-Studio inference runtime
+## DiffSynth-Studio model implementations
 
 - Public source: <https://github.com/modelscope/DiffSynth-Studio>
 - Public base revision: `04e39f7de53df7276a7b40ca1791c2a393e05ff3`
 - Original experiment fork revision: `c00782d90c872c97bda4745a9e6a41a0a4a7c4db`
-- Location: `fdanyone/vendor/diffsynth`
-- License: Apache-2.0, copied at `fdanyone/vendor/diffsynth/LICENSE`
+- Retained source: `fdanyone/model/dit.py`, `fdanyone/model/pose_encoder.py`
+- VAE dependency: `diffsynth==2.1.8`, installed from <https://pypi.org/project/diffsynth/2.1.8/>
+- License: Apache-2.0, copied at `third_party/licenses/DIFFSYNTH_LICENSE`
 
-`UPSTREAM.md`, `UPSTREAM.patch`, and `VENDORED_FILES.txt` in that directory record the exact provenance, research patch, and retained file set.
+`docs/provenance/diffsynth/UPSTREAM.md`, `UPSTREAM.patch`, and `VENDORED_FILES.txt` record the research provenance, original patch, and source migration. The local DiT and PoseEncoder preserve the released 4DAnyone checkpoint's custom multiview architecture. Wan2.2 VAE execution uses the external DiffSynth package; its source is no longer copied into 4DAnyone. The retained patch is also covered by the copied Apache-2.0 license.
 
 One retained DiffSynth file carries additional code-level upstream attribution:
 
-- `models/wan_video_pose_encoder.py` derives its pose network from [Tencent/MimicMotion](https://github.com/Tencent/MimicMotion/tree/c053153a1d124abae8c08568925ae88debc63001), Copyright Tencent, under Apache-2.0.
+- `fdanyone/model/pose_encoder.py` derives its pose network from [Tencent/MimicMotion](https://github.com/Tencent/MimicMotion/tree/c053153a1d124abae8c08568925ae88debc63001), Copyright Tencent, under Apache-2.0.
 
 ## Sapiens2-derived Goliath/MHR schema material
 

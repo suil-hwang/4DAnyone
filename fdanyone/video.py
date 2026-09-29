@@ -286,6 +286,9 @@ def decode_canonical_clip(
 
     with av.open(str(path), mode="r") as container:
         stream = container.streams.video[0]
+        # Frame threading decodes the same frames and timestamps as PyAV's
+        # slice-only default, several times faster for single-slice sources.
+        stream.thread_type = "AUTO"
         input_rate = _stream_rate(stream)
         output_rate = choose_canonical_fps(input_rate) if fps is None else fps
         metadata_rotation = _rotation_degrees(stream)
@@ -404,7 +407,10 @@ def write_gvhmr_video(clip: CanonicalClip, path: str | Path) -> Path:
         stream.width = clip.width
         stream.height = clip.height
         stream.pix_fmt = "rgb24"
-        stream.options = {"crf": "0", "preset": "medium"}
+        # Every preset is lossless at CRF 0. Ultrafast's CAVLC slices encode about
+        # three times faster and decode faster in GVHMR's slice-threaded readers;
+        # keep the default slice threading, as one slice per frame serializes them.
+        stream.options = {"crf": "0", "preset": "ultrafast"}
         for index, canonical_frame in enumerate(clip.frames):
             frame = av.VideoFrame.from_ndarray(canonical_frame.rgb, format="rgb24")
             frame.pts = index
@@ -463,7 +469,9 @@ def iter_rgb_video(path: str | Path) -> Iterator[np.ndarray]:
 
     video_path = Path(path).expanduser().resolve()
     with av.open(str(video_path), mode="r") as container:
-        for frame in container.decode(container.streams.video[0]):
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        for frame in container.decode(stream):
             yield np.ascontiguousarray(frame.to_ndarray(format="rgb24"))
 
 

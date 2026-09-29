@@ -6,7 +6,7 @@ from collections.abc import Mapping
 
 from fdanyone.errors import ConfigurationError
 
-ATTENTION_BACKEND_PRIORITY = ("flash_attn_3", "sageattention", "sdpa")
+ATTENTION_BACKEND_PRIORITY = ("sageattention", "sdpa")
 ATTENTION_BACKENDS = ("auto", *ATTENTION_BACKEND_PRIORITY)
 
 

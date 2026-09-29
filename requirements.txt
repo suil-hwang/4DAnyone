@@ -1,5 +1,6 @@
 av>=16,<17
 colorlog>=6,<7
+diffsynth==2.1.8
 einops>=0.8,<1
 ffmpeg-python>=0.2,<1
 fire>=0.7,<1
@@ -15,6 +16,7 @@ pillow>=10,<13
 pytorch-lightning>=2.3,<3
 roma==1.6.1
 safetensors>=0.5,<1
+sageattention==1.0.6
 scipy>=1.10,<2
 smplx==0.1.28
 timm==0.9.12

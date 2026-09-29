@@ -26,10 +26,9 @@ from fdanyone.space.task import SavedTask, SpaceConfig
 from fdanyone.views import MAX_PITCH, MIN_PITCH
 
 ATTENTION_LABELS = {
-    "auto": "Auto",
-    "sdpa": "SDPA",
-    "flash_attn_3": "Flash Attention 3",
     "sageattention": "SageAttention",
+    "sdpa": "SDPA",
+    "auto": "Auto",
 }
 
 
