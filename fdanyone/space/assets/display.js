@@ -35,7 +35,7 @@ async function load(data, token, signal) {
     const [{openScene}, {createMediaView}] = await modules;
     signal.throwIfAborted();
     showNote(data.notes.join(' '));
-    media = createMediaView(root, data, showNote);
+    media = createMediaView(root, data, showNote, signal);
     const overlay = media.loadOverlay(signal).catch(error => {
         if (!signal.aborted) showNote(`Source Overlay Unavailable: ${error.message}`);
     });

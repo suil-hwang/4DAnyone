@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from numbers import Integral
 from pathlib import Path
 
 import av
@@ -10,9 +11,10 @@ import numpy as np
 from PIL import Image
 
 from fdanyone.assets import resolve_foreground_model
+from fdanyone.config import INFERENCE
 from fdanyone.device import select_cuda_device
 from fdanyone.download import ensure_foreground_model
-from fdanyone.errors import FourDAnyoneError
+from fdanyone.errors import ConfigurationError, FourDAnyoneError
 from fdanyone.foreground import predict_foreground_masks
 from fdanyone.io import AtomicResultDirectory, write_json
 from fdanyone.nerfstudio.cameras import camera_to_nerfstudio
@@ -21,7 +23,7 @@ from fdanyone.nerfstudio.visual_hull import (
     build_sparse_point_cloud,
     write_sparse_point_cloud,
 )
-from fdanyone.output_directory import read_output_metadata
+from fdanyone.output import read_output_metadata
 from fdanyone.result_videos import read_target_videos
 
 # Nerfstudio casts mask pixels directly to bool, so soft BiRefNet predictions
@@ -118,6 +120,12 @@ def export_nerfstudio(
         model_dir: Model root containing (or receiving) the pinned BiRefNet files.
         device: CUDA device used for foreground segmentation.
     """
+
+    if isinstance(frame_index, bool) or not isinstance(frame_index, Integral) or not 0 <= frame_index < INFERENCE.num_frames:
+        raise ConfigurationError(
+            f"frame_index must be an integer from 0 through {INFERENCE.num_frames - 1}: {frame_index!r}."
+        )
+    frame_index = int(frame_index)
 
     result = Path(data_dir).expanduser().resolve()
     read_output_metadata(result)

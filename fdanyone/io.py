@@ -10,7 +10,7 @@ import shutil
 import stat
 import time
 import uuid
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, suppress
 from pathlib import Path
 
 from fdanyone.errors import FourDAnyoneError
@@ -67,8 +67,13 @@ def write_json(path: str | Path, value: object, *, sort_keys: bool = True) -> No
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=sort_keys) + "\n")
-    os.replace(temporary, target)
+    try:
+        temporary.write_text(json.dumps(value, indent=2, sort_keys=sort_keys) + "\n")
+        os.replace(temporary, target)
+    finally:
+        # Preserve the original write error if cleanup also fails.
+        with suppress(OSError):
+            temporary.unlink(missing_ok=True)
 
 
 def remove_tree(

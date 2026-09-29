@@ -19,7 +19,10 @@ def read_target_videos(root: Path, cameras: list[dict]) -> tuple[Path, ...]:
     if not cameras or [camera.get("camera_id") for camera in cameras] != list(range(len(cameras))):
         raise FourDAnyoneError("Camera IDs must be consecutive and ordered.")
     layout = tuple(target_video_path(index) for index in range(len(cameras)))
-    if tuple(camera.get("video") for camera in cameras) != tuple(str(path) for path in layout):
+    if any(
+        not isinstance(camera.get("video"), str) or camera["video"].replace("\\", "/") != path.as_posix()
+        for camera, path in zip(cameras, layout, strict=True)
+    ):
         raise FourDAnyoneError("Video paths must match videos/<camera_id>.mp4.")
 
     root = root.resolve()

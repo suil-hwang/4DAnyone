@@ -49,7 +49,7 @@ The companion Hugging Face repository distributes 20 modified 121-frame excerpts
 - VAE dependency: `diffsynth==2.1.8`, installed from <https://pypi.org/project/diffsynth/2.1.8/>
 - License: Apache-2.0, copied at `third_party/licenses/DIFFSYNTH_LICENSE`
 
-`docs/provenance/diffsynth/UPSTREAM.md`, `UPSTREAM.patch`, and `VENDORED_FILES.txt` record the research provenance, original patch, and source migration. The local DiT and PoseEncoder preserve the released 4DAnyone checkpoint's custom multiview architecture. Wan2.2 VAE execution uses the external DiffSynth package; its source is no longer copied into 4DAnyone. The retained patch is also covered by the copied Apache-2.0 license.
+The local DiT and PoseEncoder preserve the released 4DAnyone checkpoint's custom multiview architecture. Wan2.2 VAE execution uses the external DiffSynth package; its source is no longer copied into 4DAnyone.
 
 One retained DiffSynth file carries additional code-level upstream attribution:
 

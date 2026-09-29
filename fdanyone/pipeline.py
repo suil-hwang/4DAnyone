@@ -30,7 +30,7 @@ from fdanyone.errors import ConfigurationError
 from fdanyone.io import remove_tree, resolve_output_path, write_json
 from fdanyone.motion.gvhmr import validate_gvhmr
 from fdanyone.motion.result import MotionResult
-from fdanyone.output_directory import OutputDirectory
+from fdanyone.output import OutputDirectory, write_output
 from fdanyone.run_request import save_run_request
 from fdanyone.video import (
     decode_canonical_clip,
@@ -309,7 +309,6 @@ def run_pipeline(
             # Heavy rendering and generation are imported only after the motion
             # contract has been materialized, keeping CLI/help and CPU tests light.
             from fdanyone.model.inference import generate_views
-            from fdanyone.output_writer import write_output
 
             PROGRESS.info("Building foreground masks and skeletons", extra={"fraction": 0.30})
             conditioning = _build_conditioning(

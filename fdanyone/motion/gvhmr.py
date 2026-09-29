@@ -100,6 +100,27 @@ def gvhmr_imports(root: Path) -> Iterator[None]:
                 sys.path.remove(root_text)
 
 
+def _track_video(tracker, video_path: Path, device: str):
+    """Keep upstream's indexless YOLO request on the worker's selected GPU."""
+
+    import torch
+
+    requested_device = torch.device(device)
+    original_track = tracker.yolo.track
+
+    def track_on_device(*args, **kwargs):
+        # A torch.device also avoids CUDA_VISIBLE_DEVICES remapping in older
+        # Ultralytics versions. Upstream's explicit device="cuda" must lose.
+        kwargs["device"] = requested_device
+        return original_track(*args, **kwargs)
+
+    tracker.yolo.track = track_on_device
+    try:
+        return tracker.track(video_path)
+    finally:
+        tracker.yolo.track = original_track
+
+
 def run_gvhmr(
     *,
     clip: CanonicalClip,
@@ -174,7 +195,9 @@ def run_gvhmr(
         paths = cfg.paths
         if not Path(paths.bbx).exists():
             tracker = Tracker()
-            frame_ids, boxes, track_ids = tracker.sort_track_length(tracker.track(working_video), working_video)
+            frame_ids, boxes, track_ids = tracker.sort_track_length(
+                _track_video(tracker, working_video, device), working_video
+            )
             if track_ids:
                 track_id = track_ids[0]
                 mask = frame_id_to_mask(torch.tensor(frame_ids[track_id]), length)

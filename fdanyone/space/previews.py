@@ -8,6 +8,7 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor
 from concurrent.futures import wait as wait_futures
 from pathlib import Path
 
+from fdanyone.assets import resolve_regressor
 from fdanyone.space.viewer import export_input, export_recording, read_result
 
 
@@ -23,6 +24,7 @@ def prepare_preview(config, task, layout, start_time, has_motion, *, check_cance
         task.options if task else {"model_dir": config.model_dir, "gvhmr_root": config.gvhmr_root, "target_fps": "auto"}
     )
     directories = {key: Path(options[key]) for key in ("model_dir", "gvhmr_root")}
+    directories["regressor_path"] = resolve_regressor(options.get("mhr70_regressor_path"), options["model_dir"])
     if task and task.complete:
         return export_recording(
             read_result(config.output_dir),

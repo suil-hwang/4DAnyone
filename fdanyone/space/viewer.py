@@ -19,7 +19,7 @@ import numpy as np
 from fdanyone.config import FRAMING
 from fdanyone.errors import FourDAnyoneError
 from fdanyone.geometry.cameras import camera_grid, reference_intrinsics
-from fdanyone.output_directory import read_output_metadata
+from fdanyone.output import read_output_metadata
 from fdanyone.result_videos import read_target_videos
 from fdanyone.space import scene
 
@@ -130,16 +130,12 @@ def _cache_key(identity) -> str:
     return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()[:24]
 
 
-def _body_identity(motion_dir, model_dir, gvhmr_root):
-    from fdanyone.assets import MHR70_REGRESSOR, SMPLX_MODEL
+def _body_identity(motion_dir, model_dir, gvhmr_root, regressor_path=None):
+    from fdanyone.space.body import body_cache_identity
 
     if motion_dir is None:
         return None
-    return [
-        [_identity(motion_dir / name) for name in ("motion.json", "motion.safetensors")],
-        [_identity(model_dir / name) for name in (MHR70_REGRESSOR, SMPLX_MODEL)] if model_dir else None,
-        str(gvhmr_root.resolve()) if gvhmr_root else None,
-    ]
+    return body_cache_identity(motion_dir, model_dir, gvhmr_root, regressor_path)
 
 
 def _cached_recording(destination: Path, *, require_body: bool) -> bool:
@@ -217,7 +213,7 @@ def _save_recording(destination: Path, info: dict, log_scene) -> Path:
     return destination
 
 
-def _prepare_body(motion_dir, model_dir, gvhmr_root, cache_dir, check_cancelled):
+def _prepare_body(motion_dir, model_dir, gvhmr_root, cache_dir, check_cancelled, regressor_path=None):
     from fdanyone.space.body import load_body
 
     if motion_dir is None:
@@ -225,7 +221,9 @@ def _prepare_body(motion_dir, model_dir, gvhmr_root, cache_dir, check_cancelled)
     if model_dir is None or gvhmr_root is None:
         return None, ["Set the model and GVHMR directories to show the recovered body."]
     try:
-        return load_body(motion_dir, model_dir, gvhmr_root, cache_dir, check_cancelled), []
+        return load_body(
+            motion_dir, model_dir, gvhmr_root, cache_dir, check_cancelled, regressor_path=regressor_path
+        ), []
     except (FourDAnyoneError, OSError, ValueError) as exc:
         return None, [str(exc)]
 
@@ -237,12 +235,13 @@ def export_recording(
     source: Path | None = None,
     model_dir: Path | None = None,
     gvhmr_root: Path | None = None,
+    regressor_path: Path | None = None,
     check_cancelled: Callable = lambda: None,
 ) -> Path:
     from fdanyone.space.overlay import export_overlay
     from fdanyone.space.source import prepare_source
 
-    body_identity = _body_identity(result.directory / "gvhmr", model_dir, gvhmr_root)
+    body_identity = _body_identity(result.directory / "gvhmr", model_dir, gvhmr_root, regressor_path)
     identity = [
         RECORDING_VERSION,
         str(result.directory),
@@ -262,7 +261,9 @@ def export_recording(
         media = cache_dir / key
         media.mkdir(parents=True, exist_ok=True)
         sizes = _prepare_targets(result, media, check_cancelled)
-        body, notes = _prepare_body(result.directory / "gvhmr", model_dir, gvhmr_root, cache_dir, check_cancelled)
+        body, notes = _prepare_body(
+            result.directory / "gvhmr", model_dir, gvhmr_root, cache_dir, check_cancelled, regressor_path
+        )
         source_info = None
         if source is not None:
             indices = body["source_indices"] if body is not None else None
@@ -324,6 +325,7 @@ def export_input(
     motion_dir: Path | None = None,
     model_dir: Path | None = None,
     gvhmr_root: Path | None = None,
+    regressor_path: Path | None = None,
     check_cancelled: Callable = lambda: None,
 ) -> Path:
     from fdanyone.space.overlay import export_overlay
@@ -331,7 +333,7 @@ def export_input(
     from fdanyone.video import validate_clip_options
 
     rate = validate_clip_options(start_time=start_time, fps=None if str(target_fps).lower() == "auto" else target_fps)
-    body_identity = _body_identity(motion_dir, model_dir, gvhmr_root)
+    body_identity = _body_identity(motion_dir, model_dir, gvhmr_root, regressor_path)
     key = _cache_key(
         [RECORDING_VERSION, "input", _identity(source), float(start_time), str(rate), layout, body_identity]
     )
@@ -342,7 +344,7 @@ def export_input(
         if _cached_recording(destination, require_body=bool(motion_dir and model_dir and gvhmr_root)):
             return destination
         cache_dir.mkdir(parents=True, exist_ok=True)
-        body, notes = _prepare_body(motion_dir, model_dir, gvhmr_root, cache_dir, check_cancelled)
+        body, notes = _prepare_body(motion_dir, model_dir, gvhmr_root, cache_dir, check_cancelled, regressor_path)
         source_info = (
             prepare_source(
                 source,

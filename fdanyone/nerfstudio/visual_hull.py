@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
+from fdanyone.errors import FourDAnyoneError
 from fdanyone.nerfstudio.cameras import camera_geometry, points_to_nerfstudio, visual_hull_center
 
 NERFSTUDIO_POINT_CLOUD = "sparse_pcd.ply"
@@ -112,6 +113,11 @@ def build_sparse_point_cloud(
             if torch.any(keep):
                 kept.append(points[keep])
 
+        if not kept:
+            raise FourDAnyoneError(
+                "Visual hull is empty: no voxels lie inside all foreground masks within the carving bounds. "
+                "Check the masks and camera alignment; the subject may be outside the carving bounds."
+            )
         points_world = torch.cat(kept)
         colors = _point_colors(points_world, images, masks, projections, torch)
 

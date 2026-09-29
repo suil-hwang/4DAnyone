@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fdanyone.errors import ConfigurationError, FourDAnyoneError
 from fdanyone.io import lock_output, remove_tree, resolve_output_path, sha256_file
-from fdanyone.output_directory import OutputDirectory
+from fdanyone.output import OutputDirectory
 from fdanyone.run_request import REQUEST_FILE, read_run_request, save_run_request
 from fdanyone.space.monitor import RunMonitor
 from fdanyone.space.previews import PreviewLoader

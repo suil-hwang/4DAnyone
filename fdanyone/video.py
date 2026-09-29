@@ -299,6 +299,9 @@ def decode_canonical_clip(
         start_offset = Fraction(str(start_time))
         start = origin + start_offset
         targets = [start + Fraction(index, 1) / output_rate for index in range(num_frames)]
+        # A faster output clock reuses source frames; its nearest-frame error
+        # must follow the source clock. Preserve the existing downsampling bound.
+        max_error = Fraction(3, 4) / min(input_rate, output_rate)
         selected: list[_DecodedFrame] = []
         target_index = 0
         current = previous
@@ -306,6 +309,19 @@ def decode_canonical_clip(
         for current in decoded:
             if current.timestamp < previous.timestamp:
                 raise VideoContractError(f"Non-monotonic video PTS at frame {current.index}.")
+            if (
+                output_rate > input_rate
+                and previous.timestamp + max_error < targets[-1]
+                and current.timestamp - max_error > start
+                and current.timestamp - previous.timestamp > 2 * max_error
+            ):
+                # An offset target clock can avoid a hole's midpoint. Check the
+                # uncovered interval too, only where it overlaps the requested
+                # clip. A valid boundary sample must not expose an outside gap.
+                raise VideoContractError(
+                    f"Video timestamp gap: source interval {float(current.timestamp - previous.timestamp):.4f}s "
+                    f"> {float(2 * max_error):.4f}s."
+                )
             while target_index < num_frames and targets[target_index] <= current.timestamp:
                 target = targets[target_index]
                 candidate = previous if abs(previous.timestamp - target) <= abs(current.timestamp - target) else current
@@ -315,7 +331,6 @@ def decode_canonical_clip(
                 break
             previous = current
 
-        max_error = Fraction(3, 4) / output_rate
         if target_index < num_frames:
             # A faster canonical clock can legitimately select the final source
             # frame more than once, just as it may reuse frames in the middle of

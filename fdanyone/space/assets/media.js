@@ -2,7 +2,8 @@ import {createOverlay} from './overlay.js';
 import {createVideoCache} from './video_cache.js';
 import {createVideoPlayback} from './video_playback.js';
 
-export function createMediaView(root, data, showNote) {
+export function createMediaView(root, data, showNote, signal) {
+    signal?.throwIfAborted();
     const sourceHost = root.querySelector('.source-preview');
     const grid = root.querySelector('.target-grid');
     const scroller = root.querySelector('.target-scroll');
@@ -273,6 +274,31 @@ export function createMediaView(root, data, showNote) {
         if (overlay && source && (!maximized || maximized === source)) overlay.draw(source.presentedTime ?? source.video.currentTime);
     }
 
+    function dispose() {
+        if (disposed) return;
+        disposed = true;
+        signal?.removeEventListener('abort', dispose);
+        stopFrames?.();
+        cancelAnimationFrame(tickHandle);
+        cancelAnimationFrame(viewportHandle);
+        listeners.abort();
+        sizes.disconnect();
+        for (const item of media) {
+            if (item.frameCallback) item.video.cancelVideoFrameCallback(item.frameCallback);
+            releaseVideo(item);
+        }
+        cache.dispose();
+        overlay?.dispose();
+        sourceHost.replaceChildren();
+        sourceHost.hidden = true;
+        grid.replaceChildren();
+        enlarged.querySelector('.enlarged-content').replaceChildren();
+        enlarged.hidden = true;
+    }
+    // Release fetch leases and decoder promises immediately, so a replacement
+    // scene queued behind connect() never waits for obsolete media to load.
+    signal?.addEventListener('abort', dispose, {once: true});
+
     return {
         async connect(viewer, signal) {
             scene = viewer;
@@ -286,28 +312,13 @@ export function createMediaView(root, data, showNote) {
             requestTick();
         },
         async loadOverlay(signal) {
-            if (data.overlay && source) overlay = await createOverlay(source.content, data.overlay, data.fps, signal);
+            if (data.overlay && source) {
+                const prepared = await createOverlay(source.content, data.overlay, data.fps, signal);
+                if (disposed) prepared.dispose();
+                else overlay = prepared;
+            }
             requestTick();
         },
-        dispose() {
-            if (disposed) return;
-            disposed = true;
-            stopFrames?.();
-            cancelAnimationFrame(tickHandle);
-            cancelAnimationFrame(viewportHandle);
-            listeners.abort();
-            sizes.disconnect();
-            for (const item of media) {
-                if (item.frameCallback) item.video.cancelVideoFrameCallback(item.frameCallback);
-                releaseVideo(item);
-            }
-            cache.dispose();
-            overlay?.dispose();
-            sourceHost.replaceChildren();
-            sourceHost.hidden = true;
-            grid.replaceChildren();
-            enlarged.querySelector('.enlarged-content').replaceChildren();
-            enlarged.hidden = true;
-        }
+        dispose
     };
 }
