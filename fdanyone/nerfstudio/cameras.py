@@ -27,29 +27,18 @@ def camera_to_nerfstudio(camera_to_world: object) -> list[list[float]]:
     """Convert an OpenCV/Y-up camera-to-world matrix to OpenGL/Z-up."""
 
     matrix = np.asarray(camera_to_world, dtype=np.float64)
-    if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
-        raise FourDAnyoneError("Camera-to-world must be a finite 4x4 matrix.")
-    if not np.allclose(matrix[3], [0.0, 0.0, 0.0, 1.0]):
-        raise FourDAnyoneError("Camera-to-world must be a homogeneous transform.")
     converted = _Y_UP_TO_Z_UP @ matrix @ _OPENCV_TO_OPENGL
     return converted.tolist()
 
 
 def camera_geometry(cameras: list[dict]) -> tuple[np.ndarray, np.ndarray]:
-    """Validate a rig and return camera-to-world and projection matrices."""
+    """Return camera-to-world and projection matrices for a validated rig."""
 
     intrinsics = []
     camera_to_worlds = []
     for camera in cameras:
-        camera_id = int(camera["camera_id"])
         intrinsic = np.asarray(camera.get("K"), dtype=np.float64)
         camera_to_world = np.asarray(camera.get("camera_to_world"), dtype=np.float64)
-        if intrinsic.shape != (3, 3) or not np.isfinite(intrinsic).all():
-            raise FourDAnyoneError(f"Camera {camera_id:02d} has an invalid intrinsic matrix.")
-        if camera_to_world.shape != (4, 4) or not np.isfinite(camera_to_world).all():
-            raise FourDAnyoneError(f"Camera {camera_id:02d} has an invalid camera-to-world matrix.")
-        if not np.allclose(camera_to_world[3], [0.0, 0.0, 0.0, 1.0]):
-            raise FourDAnyoneError(f"Camera {camera_id:02d} has a non-homogeneous camera-to-world matrix.")
         intrinsics.append(intrinsic)
         camera_to_worlds.append(camera_to_world)
 
@@ -66,16 +55,12 @@ def visual_hull_center(camera_to_worlds: np.ndarray) -> np.ndarray:
     centers = camera_to_worlds[:, :3, 3]
     directions = camera_to_worlds[:, :3, 2]
     norms = np.linalg.norm(directions, axis=1, keepdims=True)
-    if np.any(norms <= 1e-12):
-        raise FourDAnyoneError("Camera rig contains a zero-length optical axis.")
     directions = directions / norms
     projectors = np.eye(3)[None] - directions[:, :, None] * directions[:, None, :]
     system = projectors.sum(axis=0)
     if np.linalg.matrix_rank(system) < 3:
-        raise FourDAnyoneError("Camera rig does not constrain a bounded visual-hull center.")
+        raise FourDAnyoneError("Camera rig has no bounded visual-hull center.")
     target = np.linalg.solve(system, np.einsum("bij,bj->i", projectors, centers))
-    if not np.isfinite(target).all():
-        raise FourDAnyoneError("Camera rig produced a non-finite visual-hull center.")
     return target
 
 

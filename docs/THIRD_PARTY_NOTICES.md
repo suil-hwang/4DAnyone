@@ -9,7 +9,7 @@ The root Apache-2.0 license applies only to first-party 4DAnyone code. The follo
 - Location: `third_party/GVHMR`
 - License: `third_party/GVHMR/LICENSE`
 
-4DAnyone uses the official upstream source without a GVHMR source patch. The pinned revision is immutable and can be fetched anonymously from the upstream repository.
+4DAnyone uses the pinned upstream source without modifications. `fdanyone/motion/gvhmr.py` connects the small PyTorch3D API subset required by static-camera inference to `fdanyone/geometry/ops.py` when PyTorch3D is absent. RoMa handles rotations and native PyTorch handles nearest-neighbor queries. Unused Wis3D and moving-camera imports are resolved without installing their optional dependencies; calling these features without their dependencies raises an error. The pinned revision is immutable and can be fetched anonymously from the upstream repository.
 
 GVHMR, HMR2, ViTPose, YOLO, SMPL, and SMPL-X model files are not bundled in 4DAnyone. The complete public inference closure is anchored by the immutable Hugging Face revision frozen in `fdanyone/assets.py`. Users obtain those files through the applicable upstream or licensed setup flows.
 
@@ -24,14 +24,13 @@ GVHMR permits use, copying, modification, and distribution for educational, rese
 
 The adaptive preprocessing path downloads the pinned BiRefNet configuration, inference source, and weights on demand. It uses the resulting foreground masks for source cropping and source-framing analysis. Those downloaded files retain their upstream terms.
 
-## PyTorch3D compatibility subset
+## RoMa rotation conversions
 
-- Upstream source: <https://github.com/facebookresearch/pytorch3d>
-- Upstream revision: `f34104cf6ebefacd7b7e07955ee7aaa823e616ac`
-- Location: `fdanyone/vendor/pytorch3d_compat`
-- License: BSD 3-Clause, copied at `fdanyone/vendor/pytorch3d_compat/LICENSE`
+- Upstream source: <https://github.com/naver/roma>
+- Dependency: `roma==1.6.1`
+- License: BSD 3-Clause, distributed with the RoMa package
 
-Classic GVHMR imports PyTorch3D rotation conversions through a broader training-time module surface. 4DAnyone retains the two upstream source files needed by inference, plus small first-party module aliases and a native PyTorch fallback for an imported optional KNN helper. The renderer and compiled PyTorch3D operators are not included or required. `UPSTREAM.md` and `VENDORED_FILES.txt` record the exact retained closure and source hashes.
+4DAnyone's small RoMa bridge preserves GVHMR's scalar-first quaternion and row-based 6D rotation conventions without changing upstream files. No copied PyTorch3D source is bundled. RoMa is Copyright NAVER Corp.; its package retains the upstream license and attributions. GVHMR's separate upstream renderer still requires full PyTorch3D and is not used by 4DAnyone inference.
 
 ## Pexels example media
 

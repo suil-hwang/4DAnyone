@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fdanyone.errors import ConfigurationError
-
 PITCH_PRESETS = ((15,), (15, 0), (30, 15, 0), (30, 15, 0, -15), (45, 30, 15, 0, -15))
 MAX_LAYERS = len(PITCH_PRESETS)
 _ASSETS = Path(__file__).with_name("assets")
@@ -18,14 +16,6 @@ PITCHES_JS = (_ASSETS / "pitches.js").read_text(encoding="utf-8")
 
 def view_counts(num_layers: int) -> tuple[int, ...]:
     return (6, 8, 12, 16, 24, 36, 48) if num_layers == 3 else (6, 12, 18, 24, 36, 48)
-
-
-def validate_view_count(views, num_layers):
-    if not 1 <= num_layers <= MAX_LAYERS:
-        raise ConfigurationError(f"No. Layers must be between 1 and {MAX_LAYERS}.")
-    counts = view_counts(num_layers)
-    if views not in counts:
-        raise ConfigurationError(f"With {num_layers} layers, choose {', '.join(map(str, counts))} views per layer.")
 
 
 def gpu_model(name: str) -> str:

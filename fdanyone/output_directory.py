@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fdanyone.errors import ConfigurationError, FourDAnyoneError
+from fdanyone.errors import ConfigurationError
 from fdanyone.io import lock_output, remove_tree, resolve_output_path
 from fdanyone.run_request import REQUEST_FILE, read_run_request
 
@@ -24,14 +24,7 @@ _DIRECTORIES = {"gvhmr", "skeletons", "videos", ".inference"}
 def read_output_metadata(directory: str | Path) -> dict:
     """Require the final commit marker before any reader consumes the output."""
 
-    path = Path(directory) / "metadata.json"
-    try:
-        metadata = json.loads(path.read_text())
-    except (OSError, ValueError) as exc:
-        raise FourDAnyoneError(f"Output is incomplete or has invalid metadata: {path}.") from exc
-    if not isinstance(metadata, dict):
-        raise FourDAnyoneError(f"Output metadata must contain a JSON object: {path}.")
-    return metadata
+    return json.loads((Path(directory) / "metadata.json").read_text())
 
 
 class OutputDirectory:
@@ -56,9 +49,9 @@ class OutputDirectory:
         if not os.path.lexists(self.destination):
             return
         if self.destination.is_symlink() or not self.destination.is_dir():
-            raise ConfigurationError(f"Output path already exists: {self.destination}. Choose a new --output_dir.")
+            raise ConfigurationError(f"Output path is occupied: {self.destination}.")
         if os.path.lexists(self.destination / "metadata.json"):
-            raise ConfigurationError(f"4DAnyone output already exists: {self.destination}. Choose a new --output_dir.")
+            raise ConfigurationError(f"Completed output already exists: {self.destination}.")
         allowed = {"gvhmr", ".inference", REQUEST_FILE}
         read_run_request(self.destination)
         if self._owner.is_file() and self._publishing.is_file():
@@ -67,14 +60,14 @@ class OutputDirectory:
         if self.working.exists():
             self._check_entries(self.working, {*_GENERATED, "gvhmr", ".4danyone", ".publishing"})
             if any(self.working.iterdir()) and not self._owner.is_file():
-                raise ConfigurationError(f"Unrecognized staging directory: {self.working}. Choose a new --output_dir.")
+                raise ConfigurationError(f"Unrecognized staging directory: {self.working}.")
 
     @staticmethod
     def _check_entries(directory: Path, allowed: set[str]) -> None:
         for path in directory.iterdir():
             expected_type = path.is_dir() if path.name in _DIRECTORIES else path.is_file()
             if path.name not in allowed or path.is_symlink() or not expected_type:
-                raise ConfigurationError(f"Unrecognized output entry: {path}. Choose a new --output_dir.")
+                raise ConfigurationError(f"Unrecognized output entry: {path}.")
 
     def _prepare(self) -> None:
         # Only a marked, interrupted publication owns artifacts outside staging.
@@ -107,7 +100,7 @@ class OutputDirectory:
     def _publish(self) -> None:
         self._check_entries(self.working, {*_GENERATED, ".4danyone"})
         if {path.name for path in self.working.iterdir()} != {*_GENERATED, ".4danyone"}:
-            raise ConfigurationError("Output is incomplete. Refusing to publish partial results.")
+            raise ConfigurationError("Cannot publish incomplete output.")
         read_output_metadata(self.working)
         for name in _GENERATED:
             if os.path.lexists(self.destination / name):

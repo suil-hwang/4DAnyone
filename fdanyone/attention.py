@@ -12,7 +12,7 @@ ATTENTION_BACKENDS = ("auto", *ATTENTION_BACKEND_PRIORITY)
 
 def validate_attention_backend(backend: str) -> None:
     if not isinstance(backend, str) or backend not in ATTENTION_BACKENDS:
-        raise ConfigurationError(f"attention_backend must be one of {', '.join(ATTENTION_BACKENDS)}, got {backend!r}.")
+        raise ConfigurationError(f"Unknown attention backend: {backend!r}.")
 
 
 def resolve_attention_backend(backend: str, availability: Mapping[str, bool]) -> str:
@@ -22,8 +22,5 @@ def resolve_attention_backend(backend: str, availability: Mapping[str, bool]) ->
     if backend == "auto":
         return next(candidate for candidate in ATTENTION_BACKEND_PRIORITY if availability[candidate])
     if not availability[backend]:
-        raise ConfigurationError(
-            f"Requested attention backend {backend!r} is not available. "
-            "Install that backend or choose --attention_backend=sdpa."
-        )
+        raise ConfigurationError(f"Attention backend unavailable: {backend}; use sdpa.")
     return backend

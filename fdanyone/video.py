@@ -6,6 +6,7 @@ import itertools
 import json
 import math
 from collections.abc import Iterator
+from contextlib import closing
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -31,10 +32,7 @@ def validate_required_video_codecs() -> None:
         except (ValueError, av.FFmpegError):
             missing.append(codec)
     if missing:
-        raise VideoContractError(
-            f"The installed FFmpeg/PyAV build lacks required video encoders: {missing}. "
-            "Install a PyAV build with libx264 and libx264rgb support."
-        )
+        raise VideoContractError(f"Missing video encoders: {', '.join(missing)}.")
 
 
 def choose_canonical_fps(input_rate: Fraction) -> Fraction:
@@ -44,9 +42,6 @@ def choose_canonical_fps(input_rate: Fraction) -> Fraction:
     divisor (48 -> 24, 50 -> 25, 60 -> 30, 120 -> 30). Rates without such a
     divisor, including 40 FPS, are preserved exactly.
     """
-
-    if input_rate <= 0:
-        raise VideoContractError(f"Input frame rate must be positive, got {input_rate}.")
 
     divisible: list[tuple[Fraction, int]] = []
     for candidate in AUTO_DOWNSAMPLE_FPS:
@@ -65,7 +60,7 @@ def _stream_rate(stream: av.video.stream.VideoStream) -> Fraction:
     for value in (stream.average_rate, stream.guessed_rate, stream.base_rate):
         if value is not None and value > 0:
             return Fraction(value.numerator, value.denominator)
-    raise VideoContractError("The input video does not declare a usable frame rate.")
+    raise VideoContractError("Missing or invalid video FPS.")
 
 
 def _normalize_rotation_degrees(raw: object) -> int:
@@ -76,7 +71,7 @@ def _normalize_rotation_degrees(raw: object) -> int:
     except (TypeError, ValueError):
         rotation = 0
     if rotation not in (0, 90, 180, 270):
-        raise VideoContractError(f"Unsupported video rotation metadata: {raw!r} degrees.")
+        raise VideoContractError(f"Unsupported video rotation: {raw!r} degrees.")
     return rotation
 
 
@@ -241,9 +236,7 @@ def _decode_frames(
         if observed_rotation is None:
             observed_rotation = frame_rotation
         elif frame_rotation != observed_rotation:
-            raise VideoContractError(
-                f"Video display rotation changes at frame {index}: {observed_rotation} -> {frame_rotation}."
-            )
+            raise VideoContractError(f"Video rotation changes at frame {index}.")
         yield _DecodedFrame(
             rgb=_frame_to_rgb(frame, frame_rotation),
             index=index,
@@ -268,15 +261,12 @@ def validate_clip_options(
     """Validate clip options without video I/O and normalize the requested FPS."""
 
     if not math.isfinite(start_time) or start_time < 0:
-        raise VideoContractError(f"start_time must be non-negative, got {start_time}.")
+        raise VideoContractError(f"Invalid start_time: {start_time}; expected a finite value >= 0.")
     if fps is None:
         return None
-    try:
-        rate = Fraction(str(fps))
-    except (ValueError, ZeroDivisionError) as exc:
-        raise VideoContractError(f"Cannot parse target fps {fps!r} as a rational frame rate.") from exc
+    rate = Fraction(str(fps))
     if rate <= 0:
-        raise VideoContractError(f"Target fps must be positive, got {rate}.")
+        raise VideoContractError(f"FPS must be positive: {rate}.")
     return rate
 
 
@@ -290,26 +280,17 @@ def decode_canonical_clip(
     """Decode one canonical clip, selecting frames by source presentation time."""
 
     path = Path(video_path).expanduser().resolve()
-    if not path.is_file():
-        raise VideoContractError(f"Input video does not exist: {path}")
-    if num_frames <= 0:
-        raise VideoContractError(f"num_frames must be positive, got {num_frames}.")
     fps = validate_clip_options(start_time=start_time, fps=fps)
 
     source_stat = path.stat()
 
     with av.open(str(path), mode="r") as container:
-        if not container.streams.video:
-            raise VideoContractError(f"Input has no video stream: {path}")
         stream = container.streams.video[0]
         input_rate = _stream_rate(stream)
         output_rate = choose_canonical_fps(input_rate) if fps is None else fps
         metadata_rotation = _rotation_degrees(stream)
         decoded = _decode_frames(container, stream, metadata_rotation)
-        try:
-            previous = next(decoded)
-        except StopIteration as exc:
-            raise VideoContractError(f"Input video contains no decodable frames: {path}") from exc
+        previous = next(decoded)
 
         origin = previous.timestamp
         start_offset = Fraction(str(start_time))
@@ -321,15 +302,10 @@ def decode_canonical_clip(
 
         for current in decoded:
             if current.timestamp < previous.timestamp:
-                raise VideoContractError(
-                    f"Input presentation timestamps are not monotonic at source frame {current.index}: "
-                    f"{float(current.timestamp):.6f}s < {float(previous.timestamp):.6f}s."
-                )
+                raise VideoContractError(f"Non-monotonic video PTS at frame {current.index}.")
             while target_index < num_frames and targets[target_index] <= current.timestamp:
                 target = targets[target_index]
                 candidate = previous if abs(previous.timestamp - target) <= abs(current.timestamp - target) else current
-                if selected and candidate.index < selected[-1].index:
-                    raise VideoContractError("Temporal sampling produced non-monotonic source-frame order.")
                 selected.append(candidate)
                 target_index += 1
             if target_index >= num_frames:
@@ -344,31 +320,23 @@ def decode_canonical_clip(
             # bound enforced below; that remains a short-input failure rather
             # than temporal padding.
             while target_index < num_frames and abs(current.timestamp - targets[target_index]) <= max_error:
-                if selected and current.index < selected[-1].index:
-                    raise VideoContractError("Temporal sampling produced non-monotonic source-frame order.")
                 selected.append(current)
                 target_index += 1
 
         if len(selected) != num_frames:
             duration = float(current.timestamp - origin)
             required = float(Fraction(num_frames - 1, 1) / output_rate + start_offset)
-            raise VideoContractError(
-                f"Input is too short for {num_frames} frames at {float(output_rate):.6f} FPS from "
-                f"start_time={start_time}: decoded duration={duration:.3f}s, required={required:.3f}s."
-            )
+            raise VideoContractError(f"Video too short: {duration:.3f}s; need {required:.3f}s.")
 
         errors = [abs(frame.timestamp - target) for frame, target in zip(selected, targets, strict=True)]
         if max(errors) > max_error:
-            raise VideoContractError(
-                "Input timestamps contain a gap too large for stable sampling: "
-                f"max error={float(max(errors)):.6f}s, limit={float(max_error):.6f}s."
-            )
+            raise VideoContractError(f"Video timestamp gap: {float(max(errors)):.4f}s > {float(max_error):.4f}s.")
         expected_shape = selected[0].rgb.shape
         if any(frame.rgb.shape != expected_shape for frame in selected[1:]):
-            raise VideoContractError("Input frame dimensions change inside the selected canonical clip.")
+            raise VideoContractError("Video frame dimensions change within the clip.")
         source_time_base = selected[0].time_base
         if any(frame.time_base != source_time_base for frame in selected[1:]):
-            raise VideoContractError("Input frame time base changes inside the selected canonical clip.")
+            raise VideoContractError("Video time base changes within the clip.")
 
         canonical_frames = tuple(
             CanonicalFrame(
@@ -383,7 +351,7 @@ def decode_canonical_clip(
 
     final_stat = path.stat()
     if (final_stat.st_size, final_stat.st_mtime_ns) != (source_stat.st_size, source_stat.st_mtime_ns):
-        raise VideoContractError(f"Input video changed while it was being decoded: {path}")
+        raise VideoContractError(f"Video changed during decoding: {path}.")
     return CanonicalClip(
         source_path=path,
         source_size_bytes=source_stat.st_size,
@@ -446,21 +414,14 @@ def write_gvhmr_video(clip: CanonicalClip, path: str | Path) -> Path:
         for packet in stream.encode():
             container.mux(packet)
     verify_lossless_video(clip, output_path)
-    with av.open(str(output_path), mode="r") as container:
-        declared_frames = int(container.streams.video[0].frames)
-    if declared_frames != len(clip.frames):
-        raise VideoContractError(
-            f"Backend MP4 declares {declared_frames} frames, expected {len(clip.frames)}: {output_path}."
-        )
     return output_path
 
 
 def verify_lossless_video(clip: CanonicalClip, path: str | Path) -> None:
-    decoded = iter_rgb_video(path)
-    sentinel = object()
-    for index, (actual, expected) in enumerate(itertools.zip_longest(decoded, clip.rgb_frames, fillvalue=sentinel)):
-        if actual is sentinel or expected is sentinel or not np.array_equal(actual, expected):
-            raise VideoContractError(f"Lossless working-video verification failed at frame {index}.")
+    with closing(iter_rgb_video(path)) as decoded:
+        for index, (actual, expected) in enumerate(zip(decoded, clip.rgb_frames, strict=True)):
+            if not np.array_equal(actual, expected):
+                raise VideoContractError(f"Lossless video mismatch at frame {index}.")
 
 
 def write_video(
@@ -476,10 +437,7 @@ def write_video(
     output_path = Path(path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     iterator = iter(frames)
-    try:
-        first = next(iterator)
-    except StopIteration as exc:
-        raise VideoContractError("Cannot encode an empty video.") from exc
+    first = next(iterator)
     height, width = first.shape[:2]
     with av.open(str(output_path), mode="w") as container:
         stream = container.add_stream("libx264", rate=fps)
@@ -489,7 +447,7 @@ def write_video(
         stream.options = {"crf": str(crf), "preset": preset}
         for index, rgb in enumerate(itertools.chain((first,), iterator)):
             if rgb.shape != first.shape:
-                raise VideoContractError(f"Frame {index} has shape {rgb.shape}, expected {first.shape}.")
+                raise VideoContractError(f"Frame {index} shape: {rgb.shape}; expected {first.shape}.")
             frame = av.VideoFrame.from_ndarray(np.ascontiguousarray(rgb), format="rgb24")
             frame.pts = index
             frame.time_base = Fraction(1, 1) / fps
@@ -505,21 +463,8 @@ def iter_rgb_video(path: str | Path) -> Iterator[np.ndarray]:
 
     video_path = Path(path).expanduser().resolve()
     with av.open(str(video_path), mode="r") as container:
-        if not container.streams.video:
-            raise VideoContractError(f"Video has no stream: {video_path}")
         for frame in container.decode(container.streams.video[0]):
             yield np.ascontiguousarray(frame.to_ndarray(format="rgb24"))
-
-
-def read_rgb_video(path: str | Path, *, expected_frames: int | None = None) -> tuple[np.ndarray, ...]:
-    """Decode an RGB video without interpreting or resampling its timestamps."""
-
-    frames = tuple(iter_rgb_video(path))
-    if expected_frames is not None and len(frames) != expected_frames:
-        raise VideoContractError(
-            f"{Path(path).expanduser().resolve()} has {len(frames)} frames, expected {expected_frames}."
-        )
-    return frames
 
 
 def load_canonical_working_clip(video_path: str | Path, metadata_path: str | Path) -> CanonicalClip:
@@ -527,28 +472,20 @@ def load_canonical_working_clip(video_path: str | Path, metadata_path: str | Pat
 
     video_path = Path(video_path).expanduser().resolve()
     metadata = json.loads(Path(metadata_path).read_text())
-    if metadata.get("sampling_policy") != SAMPLING_POLICY:
-        raise VideoContractError(f"Unsupported canonical sampling policy: {metadata.get('sampling_policy')!r}.")
     records = metadata["frames"]
-    decoded = read_rgb_video(video_path, expected_frames=int(metadata["num_frames"]))
-    if len(records) != len(decoded):
-        raise VideoContractError(
-            f"Canonical metadata has {len(records)} frame records, but {video_path} has {len(decoded)} frames."
-        )
     frames = []
-    for canonical_index, (rgb, record) in enumerate(zip(decoded, records, strict=True)):
-        if int(record["canonical_index"]) != canonical_index:
-            raise VideoContractError("Canonical subprocess metadata is not in frame-index order.")
-        frames.append(
-            CanonicalFrame(
-                rgb=rgb,
-                source_index=int(record["source_index"]),
-                source_pts=None if record["source_pts"] is None else int(record["source_pts"]),
-                source_timestamp=Fraction(str(record["source_timestamp_sec"])),
-                canonical_timestamp=Fraction(canonical_index, 1)
-                / Fraction(int(metadata["fps_num"]), int(metadata["fps_den"])),
+    with closing(iter_rgb_video(video_path)) as decoded:
+        for canonical_index, (rgb, record) in enumerate(zip(decoded, records, strict=True)):
+            frames.append(
+                CanonicalFrame(
+                    rgb=rgb,
+                    source_index=int(record["source_index"]),
+                    source_pts=None if record["source_pts"] is None else int(record["source_pts"]),
+                    source_timestamp=Fraction(str(record["source_timestamp_sec"])),
+                    canonical_timestamp=Fraction(canonical_index, 1)
+                    / Fraction(int(metadata["fps_num"]), int(metadata["fps_den"])),
+                )
             )
-        )
     return CanonicalClip(
         source_path=Path(metadata["source_path"]),
         source_size_bytes=int(metadata["source_size_bytes"]),

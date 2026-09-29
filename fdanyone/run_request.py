@@ -19,17 +19,10 @@ def read_run_request(directory: str | Path) -> dict | None:
     path = Path(directory) / REQUEST_FILE
     if not path.exists() and not path.is_symlink():
         return None
-    try:
-        if path.is_symlink():
-            raise ValueError("The request must be a regular file")
-        value = json.loads(path.read_text())
-        if value["version"] != REQUEST_VERSION or not isinstance(value["options"], dict):
-            raise ValueError("Unsupported request format")
-        if not isinstance(value["options"]["video_path"], str) or not isinstance(value["source"], dict):
-            raise ValueError("Invalid source identity")
-        return value
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        raise ConfigurationError(f"Cannot read saved inference settings: {path}.") from exc
+    value = json.loads(path.read_text())
+    if value["version"] != REQUEST_VERSION:
+        raise ConfigurationError(f"Unsupported request version {value['version']}: {path}.")
+    return value
 
 
 def save_run_request(directory: str | Path, options: dict, **fields) -> dict:

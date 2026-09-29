@@ -6,7 +6,6 @@ import sys
 
 from fdanyone.attention import validate_attention_backend
 from fdanyone.device import configure_inference_cuda_allocator, has_low_memory_gpu
-from fdanyone.errors import FourDAnyoneError
 
 
 def inference(
@@ -101,8 +100,8 @@ def main() -> None:
 
     try:
         Fire(inference)
-    except FourDAnyoneError as exc:
-        message = " ".join(line.strip() for line in str(exc).splitlines())
+    except Exception as exc:
+        message = (str(exc).strip() or type(exc).__name__).splitlines()[0]
         print(f"error: {message}", file=sys.stderr)
         raise SystemExit(1) from None
 

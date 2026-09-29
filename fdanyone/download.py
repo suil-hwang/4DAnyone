@@ -15,7 +15,6 @@ import shlex
 import shutil
 import sys
 import tempfile
-import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
@@ -51,22 +50,14 @@ def _snapshot(
     repo_id: str = HF_REPO_ID,
     revision: str = HF_REVISION,
 ) -> None:
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:
-        raise AssetError("Install requirements.txt before downloading assets.") from exc
+    from huggingface_hub import snapshot_download
 
-    try:
-        snapshot_download(
-            repo_id=repo_id,
-            revision=revision,
-            allow_patterns=allow_patterns,
-            local_dir=local_dir,
-        )
-    except Exception as exc:
-        raise AssetError(
-            f"Could not download {repo_id}@{revision}. Check the network connection and Hugging Face access."
-        ) from exc
+    snapshot_download(
+        repo_id=repo_id,
+        revision=revision,
+        allow_patterns=allow_patterns,
+        local_dir=local_dir,
+    )
 
 
 def ensure_foreground_model(model_dir: str | Path = "models") -> Path:
@@ -86,14 +77,12 @@ def ensure_foreground_model(model_dir: str | Path = "models") -> Path:
 def require_gvhmr_checkout(gvhmr_root: str | Path) -> Path:
     root = Path(gvhmr_root).expanduser().resolve()
     if not (root / "hmr4d/__init__.py").is_file():
-        raise AssetError(
-            f"GVHMR is not initialized at {root}. Run `git submodule update --init third_party/GVHMR` first."
-        )
+        raise AssetError(f"GVHMR checkout missing: {root}")
     return root
 
 
 def _ensure_link(source: Path, destination: Path) -> None:
-    source = source.expanduser().resolve()
+    source = source.expanduser().resolve(strict=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink():
         try:
@@ -105,10 +94,7 @@ def _ensure_link(source: Path, destination: Path) -> None:
     elif destination.exists():
         if destination.samefile(source):
             return
-        raise AssetError(
-            f"GVHMR asset location is occupied by an unrelated file: {destination}. "
-            f"Move it away so the downloaded {source.name} can be linked."
-        )
+        raise AssetError(f"GVHMR asset path is occupied: {destination}")
     if os.name == "nt":
         # Hardlinks need no Developer Mode or elevation and do not duplicate
         # large checkpoints. They also preserve the samefile identity above.
@@ -122,16 +108,7 @@ def _ensure_link(source: Path, destination: Path) -> None:
     except ValueError:
         # relpath cannot cross Windows drives; a symlink can use an absolute path.
         target = str(source)
-    try:
-        destination.symlink_to(target)
-    except OSError as exc:
-        if os.name != "nt":
-            raise
-        raise AssetError(
-            f"Could not link GVHMR asset {source} to {destination}. "
-            "Keep the model directory and GVHMR checkout on the same drive for hardlinks, "
-            "or enable Windows Developer Mode for symbolic links."
-        ) from exc
+    destination.symlink_to(target)
 
 
 def create_classic_gvhmr_links(
@@ -147,11 +124,8 @@ def create_classic_gvhmr_links(
     models = Path(model_dir).expanduser().resolve()
     for relative, target in GVHMR_LINKS:
         source = models / relative
-        if not source.is_file():
-            required = require_smplx if relative == SMPLX_MODEL else require_models
-            if required:
-                command = "scripts/download_smplx.py" if relative == SMPLX_MODEL else "scripts/download_model.py"
-                raise AssetError(f"Model file is missing: {source}. Run `python {command}` first.")
+        required = require_smplx if relative == SMPLX_MODEL else require_models
+        if not required and not source.is_file():
             continue
         _ensure_link(source, root / target)
     return root
@@ -229,7 +203,7 @@ def ensure_example_video(video_path: str | Path) -> Path:
         return path
     matches = [relative for relative in EXAMPLE_FILES if PurePosixPath(relative).name == path.name]
     if not matches:
-        raise AssetError(f"Input video does not exist: {path.resolve()}")
+        raise AssetError(f"Input video missing: {path.resolve()}")
     LOGGER.info("Downloading the bundled example clip %s", path.name)
     path.parent.mkdir(parents=True, exist_ok=True)
     # Stage beside the destination so the final rename stays on one filesystem.
@@ -243,13 +217,7 @@ def ensure_example_video(video_path: str | Path) -> Path:
 
 
 def _parse_interactive_path(value: str) -> Path:
-    try:
-        parts = shlex.split(value.strip(), posix=os.name != "nt")
-    except ValueError as exc:
-        raise AssetError(f"Could not parse the archive path: {exc}") from None
-    if len(parts) != 1:
-        raise AssetError("Enter one ZIP or SMPLX_NEUTRAL.npz path.")
-    path = parts[0]
+    path, = shlex.split(value.strip(), posix=os.name != "nt")
     if os.name == "nt" and len(path) >= 2 and path[0] == path[-1] and path[0] in "'\"":
         path = path[1:-1]
     return Path(path).expanduser()
@@ -259,25 +227,14 @@ def _copy_model_from_source(source: Path, destination: Path) -> None:
     if source.name == "SMPLX_NEUTRAL.npz":
         shutil.copyfile(source, destination)
         return
-    if zipfile.is_zipfile(source):
-        try:
-            with zipfile.ZipFile(source) as archive:
-                candidates = [
-                    info
-                    for info in archive.infolist()
-                    if not info.is_dir() and PurePosixPath(info.filename).parts[-3:] == SMPLX_ARCHIVE_MEMBER
-                ]
-                if len(candidates) != 1:
-                    raise AssetError(
-                        "The archive must contain exactly one models/smplx/SMPLX_NEUTRAL.npz file. "
-                        "Download models_smplx_v1_1.zip from the official SMPL-X website."
-                    )
-                with archive.open(candidates[0]) as model, destination.open("wb") as output:
-                    shutil.copyfileobj(model, output, length=8 * 1024 * 1024)
-        except zipfile.BadZipFile:
-            raise AssetError(f"SMPL-X archive is invalid: {source}") from None
-        return
-    raise AssetError("Select models_smplx_v1_1.zip or SMPLX_NEUTRAL.npz.")
+    with zipfile.ZipFile(source) as archive:
+        model_info, = [
+            info
+            for info in archive.infolist()
+            if not info.is_dir() and PurePosixPath(info.filename).parts[-3:] == SMPLX_ARCHIVE_MEMBER
+        ]
+        with archive.open(model_info) as model, destination.open("wb") as output:
+            shutil.copyfileobj(model, output, length=8 * 1024 * 1024)
 
 
 def install_smplx(
@@ -288,9 +245,6 @@ def install_smplx(
     """Install a user-provided official ZIP or neutral NPZ."""
 
     source = Path(source_path).expanduser().resolve()
-    if not source.is_file():
-        raise AssetError(f"SMPL-X source does not exist: {source}")
-
     target = Path(model_dir).expanduser().resolve() / SMPLX_MODEL
     target.parent.mkdir(parents=True, exist_ok=True)
     link_relative = next(link for model, link in GVHMR_LINKS if model == SMPLX_MODEL)
@@ -298,7 +252,7 @@ def install_smplx(
     previous_link = None
     if link.exists() and not link.is_symlink():
         if not target.is_file() or not link.samefile(target):
-            raise AssetError(f"GVHMR asset location is occupied by an unrelated file: {link}.")
+            raise AssetError(f"GVHMR asset path is occupied: {link}")
         previous_link = link.stat(follow_symlinks=False)
 
     with tempfile.TemporaryDirectory(prefix=f".{target.name}.download-", dir=target.parent) as staging:
@@ -316,7 +270,7 @@ def install_smplx(
             except FileNotFoundError:
                 unchanged = False
             if not unchanged:
-                raise AssetError(f"GVHMR asset location changed during SMPL-X installation: {link}.")
+                raise AssetError(f"GVHMR asset changed during install: {link}")
             staged_link.replace(link)
     create_classic_gvhmr_links(model_dir, gvhmr_root, require_models=False, require_smplx=True)
     return target
@@ -330,15 +284,8 @@ def _download_official(username: str, password: str, destination: Path) -> None:
         headers={"User-Agent": "4DAnyone SMPL-X installer"},
         method="POST",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
-            shutil.copyfileobj(response, output, length=8 * 1024 * 1024)
-    except (OSError, urllib.error.URLError) as exc:
-        raise AssetError(f"Official SMPL-X download failed: {exc}") from None
-    if not zipfile.is_zipfile(destination):
-        raise AssetError(
-            "The SMPL-X website did not return a ZIP archive. Check the account, license acceptance, or website."
-        )
+    with urllib.request.urlopen(request, timeout=120) as response, destination.open("wb") as output:
+        shutil.copyfileobj(response, output, length=8 * 1024 * 1024)
 
 
 def _prompt_for_archive(model_dir: str, gvhmr_root: str) -> dict[str, str] | None:
@@ -353,7 +300,7 @@ def _prompt_for_archive(model_dir: str, gvhmr_root: str) -> dict[str, str] | Non
             return None
         try:
             installed = install_smplx(_parse_interactive_path(value), model_dir, gvhmr_root)
-        except AssetError as exc:
+        except (AssetError, OSError, ValueError, zipfile.BadZipFile) as exc:
             print(f"error: {exc}")
             continue
         return {"installed": str(installed)}
@@ -388,7 +335,7 @@ def download_smplx(
                 try:
                     _download_official(username, password, archive)
                     installed = install_smplx(archive, model_dir, gvhmr_root)
-                except AssetError as exc:
+                except (AssetError, OSError, ValueError, zipfile.BadZipFile) as exc:
                     print(f"Automatic download was unavailable: {exc}")
                 else:
                     return {"installed": str(installed)}
@@ -408,14 +355,11 @@ def ensure_smplx(
         return target
 
     if not getattr(sys.stdin, "isatty", lambda: False)():
-        raise AssetError(
-            f"SMPL-X is not installed at {target}, and inference has no interactive terminal. "
-            "Run `python scripts/download_smplx.py` before starting this job."
-        )
+        raise AssetError(f"SMPL-X missing: {target}; run python scripts/download_smplx.py.")
 
     print("SMPL-X is required and has not been installed; starting its licensed setup.")
     result = download_smplx(model_dir=str(model_dir), gvhmr_root=str(gvhmr_root))
     if result is None or not target.is_file():
-        raise AssetError("SMPL-X setup was cancelled; inference cannot continue.")
+        raise AssetError("SMPL-X setup cancelled.")
     LOGGER.info("SMPL-X installed; continuing inference")
     return target

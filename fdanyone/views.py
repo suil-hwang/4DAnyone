@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from operator import index
 
 from fdanyone.config import CAMERA
 from fdanyone.errors import ConfigurationError
@@ -91,40 +92,15 @@ class ViewPlan:
         }
 
     @classmethod
-    def from_dict(cls, value: object) -> ViewPlan:
-        if not isinstance(value, dict):
-            raise ConfigurationError("View plan must be a JSON object.")
-        try:
-            return resolve_view_plan(
-                views_per_layer=value["views_per_layer"],
-                layer_pitches=value["layer_pitches"],
-                start_yaw=value["start_yaw"],
-                yaw_span=value["yaw_span"],
-                enable_rcp=value["enable_rcp"],
-                enable_tcr=value["enable_tcr"],
-            )
-        except KeyError as exc:
-            raise ConfigurationError(f"View plan is missing {exc.args[0]!r}.") from None
-
-
-def _integer(name: str, value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ConfigurationError(f"{name} must be an integer, got {value!r}.")
-    return value
-
-
-def _layer_pitches(value: object) -> tuple[int, ...]:
-    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence) or not value:
-        raise ConfigurationError("layer_pitches must be a non-empty list of integer degrees.")
-    pitches = tuple(_integer("Each layer pitch", pitch) for pitch in value)
-    if len(set(pitches)) != len(pitches):
-        raise ConfigurationError(f"layer_pitches must not contain duplicates, got {list(pitches)}.")
-    invalid = [pitch for pitch in pitches if not MIN_PITCH <= pitch <= MAX_PITCH]
-    if invalid:
-        raise ConfigurationError(
-            f"Each layer pitch must be between {MIN_PITCH} and {MAX_PITCH} degrees, got {invalid}."
+    def from_dict(cls, value: dict) -> ViewPlan:
+        return resolve_view_plan(
+            views_per_layer=value["views_per_layer"],
+            layer_pitches=value["layer_pitches"],
+            start_yaw=value["start_yaw"],
+            yaw_span=value["yaw_span"],
+            enable_rcp=value["enable_rcp"],
+            enable_tcr=value["enable_tcr"],
         )
-    return pitches
 
 
 def resolve_view_plan(
@@ -138,22 +114,23 @@ def resolve_view_plan(
 ) -> ViewPlan:
     """Validate the compact CLI settings before expensive work starts."""
 
-    views_per_layer = _integer("views_per_layer", views_per_layer)
+    views_per_layer = index(views_per_layer)
     if views_per_layer <= 0:
-        raise ConfigurationError(f"views_per_layer must be positive, got {views_per_layer}.")
-    pitches = _layer_pitches(layer_pitches)
-    start_yaw = _integer("start_yaw", start_yaw)
-    start_yaw = (start_yaw + 180) % 360 - 180
-    yaw_span = _integer("yaw_span", yaw_span)
+        raise ConfigurationError(f"views_per_layer must be positive: {views_per_layer}.")
+    pitches = tuple(map(index, layer_pitches))
+    if not pitches or len(set(pitches)) != len(pitches):
+        raise ConfigurationError(f"layer_pitches must be non-empty and distinct: {pitches}.")
+    if any(not MIN_PITCH <= pitch <= MAX_PITCH for pitch in pitches):
+        raise ConfigurationError(f"Layer pitches outside [{MIN_PITCH}, {MAX_PITCH}]: {pitches}.")
+    start_yaw = (index(start_yaw) + 180) % 360 - 180
+    yaw_span = index(yaw_span)
     if not 0 < yaw_span <= 360:
-        raise ConfigurationError(f"yaw_span must be between 1 and 360 degrees, got {yaw_span}.")
+        raise ConfigurationError(f"yaw_span must be in [1, 360]: {yaw_span}.")
     total_views = views_per_layer * len(pitches)
     if total_views % VIEWS_PER_GROUP:
-        raise ConfigurationError(f"Total target views ({total_views}) must be divisible by {VIEWS_PER_GROUP}.")
-    if not isinstance(enable_rcp, bool):
-        raise ConfigurationError(f"enable_rcp must be True or False, got {enable_rcp!r}.")
-    if not isinstance(enable_tcr, bool):
-        raise ConfigurationError(f"enable_tcr must be True or False, got {enable_tcr!r}.")
+        raise ConfigurationError(f"Target view count must be divisible by {VIEWS_PER_GROUP}: {total_views}.")
+    if not isinstance(enable_rcp, bool) or not isinstance(enable_tcr, bool):
+        raise ConfigurationError("enable_rcp and enable_tcr must be booleans.")
 
     # One target group is generated directly, without proposal views.
     rcp_active = enable_rcp and total_views > VIEWS_PER_GROUP

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
@@ -10,8 +9,6 @@ import torch
 import torch.nn.functional as F
 from safetensors.torch import load_file
 from torch import nn
-
-from fdanyone.errors import AssetError
 
 # The reference objective reads these layers from the MatConvNet VGG-19
 # checkpoint and returns features after conv{1,2,3,4,5}_2. The final two VGG
@@ -35,48 +32,13 @@ VGG19_CONV_CHANNELS = (
 VGG19_FEATURE_LAYERS = (2, 4, 6, 10, 14)
 VGG19_POOL_AFTER = frozenset((2, 4, 8, 12))
 PERCEPTUAL_FEATURE_DIVISORS = (2.6, 4.8, 3.7, 5.6, 0.15)
-PERCEPTUAL_COMPUTE_DTYPES = ("float32", "bfloat16")
+PERCEPTUAL_COMPUTE_DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16}
 
 
-def _autocast_context(compute_dtype: str, device: torch.device) -> AbstractContextManager:
-    if compute_dtype not in PERCEPTUAL_COMPUTE_DTYPES:
-        choices = ", ".join(PERCEPTUAL_COMPUTE_DTYPES)
-        raise ValueError(f"perceptual compute dtype must be one of: {choices}.")
-    if compute_dtype == "float32":
+def _autocast_context(compute_dtype: torch.dtype, device: torch.device) -> AbstractContextManager:
+    if compute_dtype == torch.float32:
         return nullcontext()
-    if device.type != "cuda":
-        raise RuntimeError("bfloat16 perceptual computation currently requires CUDA.")
-    if not torch.cuda.is_bf16_supported():
-        raise RuntimeError("This CUDA device does not support bfloat16 convolution.")
-    return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
-
-
-def _validated_weights(path: Path) -> Mapping[str, torch.Tensor]:
-    try:
-        state = load_file(str(path), device="cpu")
-    except (OSError, ValueError) as exc:
-        raise AssetError(f"Cannot load perceptual VGG-19 weights at {path}: {exc}") from exc
-
-    expected = set()
-    for index, (in_channels, out_channels) in enumerate(VGG19_CONV_CHANNELS, start=1):
-        weight_name = f"conv{index}.weight"
-        bias_name = f"conv{index}.bias"
-        expected.update((weight_name, bias_name))
-        weight = state.get(weight_name)
-        bias = state.get(bias_name)
-        expected_weight_shape = (out_channels, in_channels, 3, 3)
-        if weight is None or tuple(weight.shape) != expected_weight_shape:
-            shape = None if weight is None else tuple(weight.shape)
-            raise AssetError(
-                f"Perceptual VGG-19 tensor {weight_name} has shape {shape}; expected {expected_weight_shape}."
-            )
-        if bias is None or tuple(bias.shape) != (out_channels,):
-            shape = None if bias is None else tuple(bias.shape)
-            raise AssetError(f"Perceptual VGG-19 tensor {bias_name} has shape {shape}; expected {(out_channels,)}.")
-    unexpected = set(state) - expected
-    if unexpected:
-        raise AssetError(f"Perceptual VGG-19 weights contain unexpected tensors: {sorted(unexpected)}")
-    return state
+    return torch.autocast(device_type=device.type, dtype=compute_dtype)
 
 
 class MatConvNetVGG19Features(nn.Module):
@@ -90,12 +52,7 @@ class MatConvNetVGG19Features(nn.Module):
     def __init__(self, weights_path: str | Path) -> None:
         super().__init__()
         path = Path(weights_path).expanduser().resolve()
-        if not path.is_file():
-            raise AssetError(
-                f"Perceptual VGG-19 weights do not exist: {path}. "
-                "Run `python scripts/download_model.py` to install them."
-            )
-        state = _validated_weights(path)
+        state = load_file(str(path), device="cpu")
         for index in range(1, len(VGG19_CONV_CHANNELS) + 1):
             self.register_buffer(
                 f"conv{index}_weight",
@@ -130,8 +87,6 @@ def perceptual_distance(
 ) -> torch.Tensor:
     """Apply the reference pixel/feature weighting to scaled images."""
 
-    if len(prediction_features) != 5 or len(target_features) != 5:
-        raise ValueError("The perceptual loss requires exactly five VGG feature tensors.")
     terms = [torch.mean(torch.abs(target - prediction))]
     terms.extend(
         torch.mean(torch.abs(target_features[index] - prediction_features[index])) / divisor
@@ -145,10 +100,7 @@ class VGG19PerceptualLoss(nn.Module):
 
     def __init__(self, weights_path: str | Path, compute_dtype: str = "float32") -> None:
         super().__init__()
-        if compute_dtype not in PERCEPTUAL_COMPUTE_DTYPES:
-            choices = ", ".join(PERCEPTUAL_COMPUTE_DTYPES)
-            raise ValueError(f"perceptual compute dtype must be one of: {choices}.")
-        self.compute_dtype = compute_dtype
+        self.compute_dtype = PERCEPTUAL_COMPUTE_DTYPES[compute_dtype]
         self.features = MatConvNetVGG19Features(weights_path)
         self.register_buffer(
             "imagenet_mean",
@@ -157,8 +109,6 @@ class VGG19PerceptualLoss(nn.Module):
         )
 
     def forward(self, prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        if prediction.shape != target.shape or prediction.ndim != 4 or prediction.shape[1] != 3:
-            raise ValueError("VGG-19 perceptual loss expects prediction and target with matching [B, 3, H, W] shapes.")
         prediction_scaled = prediction.float() * 255.0 - self.imagenet_mean
         target_scaled = target.float() * 255.0 - self.imagenet_mean
         with _autocast_context(self.compute_dtype, prediction.device):

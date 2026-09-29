@@ -16,7 +16,6 @@ from fdanyone.space.controls import (
     SLIDER_JS,
     describe_gpus,
     gpu_model,
-    validate_view_count,
     view_counts,
 )
 from fdanyone.space.gpus import available_gpus
@@ -170,7 +169,6 @@ class InferenceForm:
             *(values[name] for name in ("views_per_layer", "layer_pitches", "start_yaw", "yaw_span"))
         )
         if editable:
-            validate_view_count(layout["views_per_layer"], len(layout["layer_pitches"]))
             layout["layer_pitches"] = sorted(layout["layer_pitches"], reverse=True)
         return layout
 

@@ -19,7 +19,7 @@ def log_video(recording, entity: str, video: Path, fps, frames: int) -> None:
     asset = rr.AssetVideo(path=video)
     timestamps = asset.read_frame_timestamps_nanos()
     if len(timestamps) != frames:
-        raise FourDAnyoneError(f"Video preview has {len(timestamps)} frames, expected {frames}.")
+        raise FourDAnyoneError(f"Video frame count mismatch: {len(timestamps)} != {frames}")
     recording.log(entity, asset, static=True)
     recording.send_columns(
         entity,

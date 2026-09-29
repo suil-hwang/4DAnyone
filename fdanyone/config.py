@@ -43,16 +43,6 @@ class DenoisingProfile:
     tcr_stride: int
     freeze_tcr_after_one_cycle: bool
 
-    def __post_init__(self) -> None:
-        if self.num_inference_steps <= 0:
-            raise ValueError("Denoising steps must be positive.")
-        if not 0.0 < self.denoising_strength <= 1.0:
-            raise ValueError("Denoising strength must be in (0, 1].")
-        if self.scheduler_shift <= 0.0:
-            raise ValueError("Scheduler shift must be positive.")
-        if self.tcr_stride <= 0:
-            raise ValueError("TCR stride must be positive.")
-
     def to_dict(self) -> dict[str, object]:
         return {
             "name": self.name,
@@ -68,10 +58,6 @@ class DenoisingProfile:
 class CameraConfig:
     count: int = 24
     pitch_degrees: float = 15.0
-
-    def __post_init__(self) -> None:
-        if self.count <= 0:
-            raise ValueError("Camera count must be positive.")
 
 
 @dataclass(frozen=True)

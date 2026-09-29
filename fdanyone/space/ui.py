@@ -20,7 +20,7 @@ from fdanyone.space.task import path_label
 from fdanyone.space.viewer import export_layout_update, scene_info
 from fdanyone.space.web_assets import display_payload, prepare_web_assets
 
-ERRORS = (FourDAnyoneError, OSError, ValueError, TypeError, KeyError)
+ERRORS = (FourDAnyoneError, OSError, ValueError, TypeError, KeyError, IndexError, StopIteration, ZeroDivisionError)
 ASSETS = Path(__file__).with_name("assets")
 
 

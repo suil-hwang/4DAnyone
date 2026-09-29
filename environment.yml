@@ -37,6 +37,7 @@ dependencies:
       - sageattention==1.0.6
       - triton-windows==3.8.0.post28; sys_platform == "win32"
       - lapx
+      - roma
       - smplx
       - gradio-rerun==0.37.1
       - ultralytics-platform==0.1.65

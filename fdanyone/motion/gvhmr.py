@@ -1,30 +1,21 @@
-"""Classic GVHMR inference used by 4DAnyone.
-
-The official demo imports training, evaluation, visualization, and
-moving-camera modules eagerly. This file keeps the released static-camera path
-in one place without exposing Hydra or backend abstractions to 4DAnyone users.
-"""
+"""Recover static-camera motion with the pinned GVHMR inference pipeline."""
 
 from __future__ import annotations
 
-import contextlib
 import importlib
 import importlib.util
 import itertools
 import json
-import os
 import subprocess
 import sys
-import traceback
-import types
-import warnings
 from collections.abc import Iterator
-from contextlib import contextmanager
-from pathlib import Path, PurePath
+from contextlib import chdir, closing, contextmanager
+from importlib.machinery import ModuleSpec
+from pathlib import Path
+from types import ModuleType
 
 from fdanyone.errors import AssetError, VideoContractError
 from fdanyone.motion.result import SMPL_PARAMETER_NAMES, MotionResult
-from fdanyone.vendor.pytorch3d_compat import install_if_needed as install_pytorch3d_compat
 from fdanyone.video import CanonicalClip
 
 GVHMR_ASSETS = (
@@ -37,242 +28,76 @@ GVHMR_ASSETS = (
 
 
 def validate_gvhmr(root: str | Path) -> tuple[Path, str]:
-    """Locate the GVHMR checkout and files consumed by inference."""
+    """Locate the GVHMR checkout and the model files consumed by inference."""
 
     path = Path(root).expanduser().resolve()
-    required = ("hmr4d/__init__.py", "tools/demo/demo.py", *GVHMR_ASSETS)
-    missing = [relative for relative in required if not (path / relative).is_file()]
+    missing = [name for name in ("hmr4d/__init__.py", *GVHMR_ASSETS) if not (path / name).is_file()]
     if missing:
-        formatted = "\n  - ".join(missing)
-        raise AssetError(
-            f"GVHMR is incomplete under {path}. Run `git submodule update --init third_party/GVHMR`, "
-            f"`python scripts/download_model.py`, and `python scripts/download_smplx.py`; missing:\n"
-            f"  - {formatted}"
-        )
-    try:
-        revision = subprocess.check_output(
-            ["git", "-C", str(path), "rev-parse", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (OSError, subprocess.CalledProcessError) as exc:
-        raise AssetError(f"GVHMR must be a git checkout: {path}") from exc
-    if len(revision) != 40:
-        raise AssetError(f"Cannot identify the GVHMR revision at {path}.")
+        raise AssetError(f"Missing GVHMR files in {path}: {', '.join(missing)}")
+    revision = subprocess.check_output(
+        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+    ).strip()
     return path, revision
 
 
-def hydra_override(name: str, value: str | PurePath) -> str:
-    """Quote a path for the internal GVHMR Hydra config."""
-
-    if not name.isidentifier():
-        raise ValueError(f"Invalid Hydra field name: {name!r}.")
-    # Hydra keeps JSON-escaped backslashes, which corrupts UNC path anchors.
-    text = value.as_posix() if isinstance(value, PurePath) else value
-    return f"{name}={json.dumps(text, ensure_ascii=False)}"
-
-
-def _full_frame_bbox_xyxy(width: int, height: int) -> tuple[float, float, float, float]:
-    if width <= 0 or height <= 0:
-        raise ValueError(f"Video dimensions must be positive, got {width}x{height}.")
-    return 0.0, 0.0, float(width), float(height)
-
-
-def _is_empty_tracker_error(error: BaseException) -> bool:
-    """Recognize only the pinned GVHMR tracker's empty-result failure."""
-
-    if not isinstance(error, IndexError) or str(error) != "list index out of range":
-        return False
-    frames = traceback.extract_tb(error.__traceback__)
-    return any(
-        frame.name == "get_one_track" and Path(frame.filename).parts[-4:] == ("hmr4d", "utils", "preproc", "tracker.py")
-        for frame in frames
-    )
+def _unavailable_optional_feature(*args, **kwargs):
+    raise NotImplementedError("Wis3D and moving-camera inference require their optional dependencies.")
 
 
 @contextmanager
 def gvhmr_imports(root: Path) -> Iterator[None]:
-    """Temporarily import GVHMR as if its checkout were the working tree."""
+    """Import unmodified GVHMR with the geometry APIs needed by static inference."""
 
-    old_cwd = Path.cwd()
     root_text = str(root)
-    already_present = root_text in sys.path
-    if not already_present:
-        sys.path.insert(0, root_text)
-    os.chdir(root)
-    try:
-        yield
-    finally:
-        os.chdir(old_cwd)
-        if not already_present:
-            with contextlib.suppress(ValueError):
-                sys.path.remove(root_text)
-
-
-@contextmanager
-def _legacy_checkpoint_loading():
-    """Restore pre-2.6 ``torch.load`` behavior for trusted GVHMR assets."""
-
-    name = "TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"
-    previous = os.environ.get(name)
-    os.environ[name] = "1"
-    try:
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=r"Environment variable TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD detected.*",
-                category=UserWarning,
-            )
-            yield
-    finally:
-        if previous is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = previous
-
-
-def _install_optional_import_stubs() -> None:
-    """Avoid visualization and moving-camera dependencies we never call."""
-
-    def unavailable(*_args, **_kwargs):
-        raise RuntimeError("Wis3D visualization is not part of 4DAnyone inference.")
-
-    if importlib.util.find_spec("wis3d") is None:
-        module = types.ModuleType("hmr4d.utils.wis3d_utils")
-        module.make_wis3d = unavailable
-        module.add_motion_as_lines = unavailable
-        sys.modules[module.__name__] = module
-
-    def moving_camera_unavailable(*_args, **_kwargs):
-        raise RuntimeError("SimpleVO is unavailable in the static-camera 4DAnyone runtime.")
-
-    module = types.ModuleType("hmr4d.utils.preproc.relpose.simple_vo")
-    module.SimpleVO = moving_camera_unavailable
-    sys.modules[module.__name__] = module
-
-
-def _register_inference_store() -> None:
-    """Register only the Hydra groups referenced by GVHMR's demo config."""
-
-    _install_optional_import_stubs()
-    for module in (
-        "hmr4d.model.gvhmr.gvhmr_pl_demo",
-        "hmr4d.model.gvhmr.utils.endecoder",
-        "hmr4d.network.gvhmr.relative_transformer",
-    ):
-        importlib.import_module(module)
-
-    # GVHMR installs a colored handler on the root logger. Remove only that
-    # duplicate because the public pipeline already owns a handler.
-    logger_module = sys.modules.get("hmr4d.utils.pylogger")
-    logger = getattr(logger_module, "Log", None)
-    handler = getattr(logger_module, "ch", None)
-    if (
-        logger is not None
-        and handler in logger.handlers
-        and any(candidate is not handler for candidate in logger.handlers)
-    ):
-        logger.removeHandler(handler)
-
-
-def _run_preprocess(cfg) -> None:
-    """Run tracker, ViTPose, and image-feature extraction."""
-
-    import torch
-    from hmr4d.utils.geo.hmr_cam import get_bbx_xys_from_xyxy
-    from hmr4d.utils.preproc.tracker import Tracker
-    from hmr4d.utils.preproc.vitfeat_extractor import Extractor
-    from hmr4d.utils.preproc.vitpose import VitPoseExtractor
-    from hmr4d.utils.pylogger import Log
-    from hmr4d.utils.video_io_utils import get_video_lwh
-
-    if not bool(cfg.static_cam):
-        raise ValueError("4DAnyone requires GVHMR static_cam=true.")
-
-    Log.info("[Preprocess] Start!")
-    started = Log.time()
-    video_path = cfg.video_path
-    paths = cfg.paths
-
-    if not Path(paths.bbx).exists():
-        tracker = Tracker()
+    with chdir(root):
+        path_added = root_text not in sys.path
+        if path_added:
+            sys.path.insert(0, root_text)
         try:
-            bbx_xyxy = tracker.get_one_track(video_path).float()
-        except IndexError as error:
-            if not _is_empty_tracker_error(error):
-                raise
-            frame_count, width, height = get_video_lwh(video_path)
-            bbx_xyxy = torch.tensor(
-                _full_frame_bbox_xyxy(width, height),
-                dtype=torch.float32,
-            ).repeat(frame_count, 1)
-            Log.warning(
-                "GVHMR tracker produced no usable person track; using a full-frame bbox for "
-                f"all {frame_count} frames of {video_path}."
-            )
-        bbx_xys = get_bbx_xys_from_xyxy(bbx_xyxy, base_enlarge=1.2).float()
-        torch.save({"bbx_xyxy": bbx_xyxy, "bbx_xys": bbx_xys}, paths.bbx)
-        del tracker
-    else:
-        bbx_xys = torch.load(paths.bbx, weights_only=True)["bbx_xys"]
-        Log.info("[Preprocess] bbx (xyxy, xys) from %s", paths.bbx)
+            if "pytorch3d" not in sys.modules and importlib.util.find_spec("pytorch3d") is None:
+                import roma
 
-    if not Path(paths.vitpose).exists():
-        extractor = VitPoseExtractor()
-        torch.save(extractor.extract(video_path, bbx_xys), paths.vitpose)
-        del extractor
-    else:
-        Log.info("[Preprocess] vitpose from %s", paths.vitpose)
+                from fdanyone.geometry import ops
 
-    if not Path(paths.vit_features).exists():
-        extractor = Extractor()
-        torch.save(extractor.extract_video_features(video_path, bbx_xys), paths.vit_features)
-        del extractor
-    else:
-        Log.info("[Preprocess] vit_features from %s", paths.vit_features)
-
-    Log.info("[Preprocess] End. Time elapsed: %.2fs", Log.time() - started)
-
-
-def _load_data(cfg):
-    """Build the static-camera tensors consumed by GVHMR."""
-
-    import torch
-    from hmr4d.utils.geo.hmr_cam import estimate_K
-    from hmr4d.utils.geo_transform import compute_cam_angvel
-    from hmr4d.utils.video_io_utils import get_video_lwh
-
-    if not bool(cfg.static_cam):
-        raise ValueError("4DAnyone requires GVHMR static_cam=true.")
-    paths = cfg.paths
-    length, width, height = get_video_lwh(cfg.video_path)
-    rotation_world_to_camera = torch.eye(3).repeat(length, 1, 1)
-    intrinsics = estimate_K(width, height).repeat(length, 1, 1)
-    return {
-        "length": torch.tensor(length),
-        "bbx_xys": torch.load(paths.bbx, weights_only=True)["bbx_xys"],
-        "kp2d": torch.load(paths.vitpose, weights_only=True),
-        "K_fullimg": intrinsics,
-        "cam_angvel": compute_cam_angvel(rotation_world_to_camera),
-        "f_imgseq": torch.load(paths.vit_features, weights_only=True),
-    }
-
-
-def _verify_gvhmr_decode(clip: CanonicalClip, working_video: Path, reader_factory) -> None:
-    """Ensure GVHMR's own video reader sees the canonical RGB frames."""
-
-    import numpy as np
-
-    reader = reader_factory(str(working_video))
-    sentinel = object()
-    try:
-        for index, (actual, expected) in enumerate(itertools.zip_longest(reader, clip.rgb_frames, fillvalue=sentinel)):
-            if actual is sentinel or expected is sentinel or not np.array_equal(actual, expected):
-                raise VideoContractError(f"GVHMR decoded a different canonical frame at index {index}.")
-    finally:
-        close = getattr(reader, "close", None)
-        if close is not None:
-            close()
+                package = ModuleType("pytorch3d")
+                package.transforms = ModuleType("pytorch3d.transforms")
+                package.transforms.__dict__.update(
+                    axis_angle_to_matrix=roma.rotvec_to_rotmat,
+                    matrix_to_axis_angle=roma.rotmat_to_rotvec,
+                    so3_exp_map=roma.rotvec_to_rotmat,
+                    so3_log_map=roma.rotmat_to_rotvec,
+                    matrix_to_rotation_6d=ops.matrix_to_rotation_6d,
+                    rotation_6d_to_matrix=ops.rotation_6d_to_matrix,
+                    matrix_to_quaternion=ops.matrix_to_quaternion,
+                    quaternion_to_matrix=ops.quaternion_to_matrix,
+                    quaternion_to_axis_angle=ops.quaternion_to_axis_angle,
+                    euler_angles_to_matrix=ops.euler_angles_to_matrix,
+                )
+                package.transforms.__spec__ = ModuleSpec("pytorch3d.transforms", loader=None)
+                package.ops = ModuleType("pytorch3d.ops")
+                package.ops.knn = ops
+                for module in (package, package.ops):
+                    module.__path__ = []
+                    module.__spec__ = ModuleSpec(module.__name__, loader=None, is_package=True)
+                sys.modules.update({
+                    "pytorch3d": package,
+                    "pytorch3d.transforms": package.transforms,
+                    "pytorch3d.ops": package.ops,
+                    "pytorch3d.ops.knn": ops,
+                })
+            for dependency, name, exports in (
+                ("wis3d", "hmr4d.utils.wis3d_utils", ("make_wis3d", "add_motion_as_lines")),
+                ("pycolmap", "hmr4d.utils.preproc.relpose.simple_vo", ("SimpleVO",)),
+            ):
+                if name not in sys.modules and importlib.util.find_spec(dependency) is None:
+                    module = ModuleType(name)
+                    module.__dict__.update(dict.fromkeys(exports, _unavailable_optional_feature))
+                    module.__spec__ = ModuleSpec(name, loader=None)
+                    sys.modules[name] = module
+            yield
+        finally:
+            if path_added:
+                sys.path.remove(root_text)
 
 
 def run_gvhmr(
@@ -289,27 +114,48 @@ def run_gvhmr(
     working_video = Path(working_video).expanduser().resolve()
     output_root = Path(output_dir).expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    length = len(clip.frames)
 
-    with gvhmr_imports(root), _legacy_checkpoint_loading():
-        install_pytorch3d_compat()
+    with gvhmr_imports(root):
         import hydra
+        import numpy as np
         import torch
         from hmr4d.model.gvhmr.gvhmr_pl_demo import DemoPL
-        from hmr4d.utils.net_utils import detach_to_cpu
+        from hmr4d.utils.geo.hmr_cam import estimate_K, get_bbx_xys_from_xyxy
+        from hmr4d.utils.geo_transform import compute_cam_angvel
+        from hmr4d.utils.net_utils import detach_to_cpu, moving_average_smooth
+        from hmr4d.utils.preproc.tracker import Tracker
+        from hmr4d.utils.preproc.vitfeat_extractor import Extractor
+        from hmr4d.utils.preproc.vitpose import VitPoseExtractor
+        from hmr4d.utils.pylogger import Log, ch
+        from hmr4d.utils.seq_utils import (
+            frame_id_to_mask,
+            get_frame_id_list_from_mask,
+            linear_interpolate_frame_ids,
+            rearrange_by_mask,
+        )
         from hmr4d.utils.video_io_utils import get_video_reader
         from hydra import compose, initialize_config_module
         from omegaconf import open_dict
 
-        _register_inference_store()
+        # Import only the model groups referenced by the static-camera config.
+        for module in (
+            "hmr4d.model.gvhmr.utils.endecoder",
+            "hmr4d.network.gvhmr.relative_transformer",
+        ):
+            importlib.import_module(module)
+        if ch in Log.handlers and len(Log.handlers) > 1:
+            Log.removeHandler(ch)
+
         with initialize_config_module(version_base="1.3", config_module="hmr4d.configs"):
             cfg = compose(
                 config_name="demo",
                 overrides=[
-                    hydra_override("video_name", working_video.stem),
+                    f"video_name={json.dumps(working_video.stem, ensure_ascii=False)}",
                     "static_cam=true",
                     "verbose=false",
                     "use_dpvo=false",
-                    hydra_override("output_root", output_root),
+                    f"output_root={json.dumps(output_root.as_posix(), ensure_ascii=False)}",
                 ],
             )
         Path(cfg.output_dir).mkdir(parents=True, exist_ok=True)
@@ -317,11 +163,59 @@ def run_gvhmr(
         with open_dict(cfg):
             cfg.video_path = str(working_video)
 
-        _verify_gvhmr_decode(clip, working_video, get_video_reader)
-        _run_preprocess(cfg)
-        data = _load_data(cfg)
-        if int(data["length"]) != len(clip.frames):
-            raise RuntimeError(f"GVHMR decoded {int(data['length'])} frames, expected {len(clip.frames)}.")
+        # Verify the reader before reusing the canonical clip's dimensions.
+        with closing(get_video_reader(str(working_video))) as reader:
+            for index, (actual, expected) in enumerate(itertools.zip_longest(reader, clip.rgb_frames)):
+                if actual is None or expected is None or not np.array_equal(actual, expected):
+                    raise VideoContractError(f"GVHMR frame mismatch at index {index}.")
+
+        Log.info("[Preprocess] Start!")
+        started = Log.time()
+        paths = cfg.paths
+        if not Path(paths.bbx).exists():
+            tracker = Tracker()
+            frame_ids, boxes, track_ids = tracker.sort_track_length(tracker.track(working_video), working_video)
+            if track_ids:
+                track_id = track_ids[0]
+                mask = frame_id_to_mask(torch.tensor(frame_ids[track_id]), length)
+                bbx_xyxy = rearrange_by_mask(torch.tensor(boxes[track_id]), mask)
+                bbx_xyxy = linear_interpolate_frame_ids(bbx_xyxy, get_frame_id_list_from_mask(~mask))
+                for _ in range(2):
+                    bbx_xyxy = moving_average_smooth(bbx_xyxy, window_size=5, dim=0)
+            else:
+                bbx_xyxy = torch.tensor([0.0, 0.0, clip.width, clip.height]).repeat(length, 1)
+                Log.warning("No person track found; using a full-frame bbox for %s.", working_video)
+            bbx_xyxy = bbx_xyxy.float()
+            bbx_xys = get_bbx_xys_from_xyxy(bbx_xyxy, base_enlarge=1.2).float()
+            torch.save({"bbx_xyxy": bbx_xyxy, "bbx_xys": bbx_xys}, paths.bbx)
+            del tracker
+        else:
+            bbx_xys = torch.load(paths.bbx, weights_only=True)["bbx_xys"]
+            Log.info("[Preprocess] bbx from %s", paths.bbx)
+
+        if not Path(paths.vitpose).exists():
+            extractor = VitPoseExtractor()
+            torch.save(extractor.extract(str(working_video), bbx_xys), paths.vitpose)
+            del extractor
+        else:
+            Log.info("[Preprocess] vitpose from %s", paths.vitpose)
+
+        if not Path(paths.vit_features).exists():
+            extractor = Extractor()
+            torch.save(extractor.extract_video_features(str(working_video), bbx_xys), paths.vit_features)
+            del extractor
+        else:
+            Log.info("[Preprocess] vit_features from %s", paths.vit_features)
+        Log.info("[Preprocess] End. Time elapsed: %.2fs", Log.time() - started)
+
+        data = {
+            "length": torch.tensor(length),
+            "bbx_xys": bbx_xys,
+            "kp2d": torch.load(paths.vitpose, weights_only=True),
+            "K_fullimg": estimate_K(clip.width, clip.height).repeat(length, 1, 1),
+            "cam_angvel": compute_cam_angvel(torch.eye(3).repeat(length, 1, 1)),
+            "f_imgseq": torch.load(paths.vit_features, weights_only=True),
+        }
         observed_keypoints_2d = data["kp2d"].detach().cpu()
         model: DemoPL = hydra.utils.instantiate(cfg.model, _recursive_=False)
         model.load_pretrained_model(cfg.ckpt_path)
@@ -346,5 +240,4 @@ def run_gvhmr(
         K_fullimg=prediction["K_fullimg"],
         observed_keypoints_2d=observed_keypoints_2d,
     )
-    result.validate(expected_frames=len(clip.frames))
     return result

@@ -202,10 +202,8 @@ def run_pipeline(
     pipeline_started = time.monotonic()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     PROGRESS.info("Checking input and settings", extra={"fraction": 0.02})
-    if seed < 0:
-        raise ConfigurationError(f"seed must be non-negative, got {seed}.")
     if not isinstance(enable_turbo, bool):
-        raise ConfigurationError(f"enable_turbo must be True or False, got {enable_turbo!r}.")
+        raise ConfigurationError(f"enable_turbo must be a boolean: {enable_turbo!r}.")
     denoising_profile = RANK64_DELTA4 if enable_turbo else BASE24
     view_plan = resolve_view_plan(
         views_per_layer=views_per_layer,
@@ -288,10 +286,7 @@ def run_pipeline(
                     clip_metadata=clip_metadata,
                 )
             if motion.gvhmr_revision != gvhmr_revision:
-                raise ConfigurationError(
-                    f"GVHMR motion has revision {motion.gvhmr_revision}, expected {gvhmr_revision}. "
-                    "Choose a new --output_dir to recover motion with the current GVHMR version."
-                )
+                raise ConfigurationError("GVHMR revision mismatch; use a new output directory.")
             motion.validate_against_clip(clip)
             if output.motion_dir.exists():
                 save_run_request(destination, request_options)
@@ -329,14 +324,6 @@ def run_pipeline(
                 device=device,
                 worker_python=worker_python,
             )
-            if conditioning.num_frames != len(clip.frames) or (
-                conditioning.fps_num,
-                conditioning.fps_den,
-            ) != (
-                clip.fps_num,
-                clip.fps_den,
-            ):
-                raise ConfigurationError("Skeleton conditioning does not match the canonical clip timeline.")
             # Re-decode the worker-produced source before it becomes a model tensor.
             verify_lossless_video(clip, conditioning.source_video)
             # Generation reads the verified working video. Only lightweight

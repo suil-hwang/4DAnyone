@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable
-from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
@@ -27,11 +26,10 @@ from fdanyone.geometry.cameras import (
 from fdanyone.geometry.crop import Crop, center_crop, crop_from_bounds, mask_bounds, transform_intrinsics
 from fdanyone.geometry.framing import analyze_input_framing, solve_clip_framing
 from fdanyone.io import write_json
-from fdanyone.motion.gvhmr import gvhmr_imports, validate_gvhmr
+from fdanyone.motion.gvhmr import gvhmr_imports
 from fdanyone.motion.result import MotionResult
 from fdanyone.skeleton.keypoints import KEYPOINT_NAMES
 from fdanyone.skeleton.renderer import estimate_body_height, projected_body_scales, render_goliath40
-from fdanyone.vendor.pytorch3d_compat import install_if_needed as install_pytorch3d_compat
 from fdanyone.video import CanonicalClip, iter_rgb_video, write_lossless_video, write_video
 from fdanyone.views import ViewPlan
 
@@ -67,28 +65,14 @@ class Conditioning:
 
     @classmethod
     def load(cls, directory: str | Path) -> Conditioning:
+        """Read the completed conditioning worker's private scratch artifacts."""
+
         root = Path(directory).expanduser().resolve()
         camera_payload = json.loads((root / "cameras.json").read_text())
         metadata = json.loads((root / "metadata.json").read_text())
-        try:
-            view_plan = ViewPlan.from_dict(metadata["view_plan"])
-        except (KeyError, TypeError) as exc:
-            raise FourDAnyoneError("Conditioning artifacts have no valid view plan.") from exc
+        view_plan = ViewPlan.from_dict(metadata["view_plan"])
         records = camera_payload["cameras"]
-        if [int(record["camera_id"]) for record in records] != list(range(view_plan.num_target_views)):
-            raise FourDAnyoneError("Target conditioning cameras are not in canonical order.")
-        for record, view in zip(records, view_plan.target_views, strict=True):
-            if (
-                int(record.get("layer_index", -1)) != view.layer_index
-                or int(record.get("pitch_degrees", 1000)) != view.pitch
-                or abs(float(record.get("yaw_degrees", 1000.0)) - view.yaw) > 1e-8
-            ):
-                raise FourDAnyoneError("Target conditioning cameras do not match the resolved view layout.")
-        if camera_payload.get("front_camera_ids") != list(view_plan.front_camera_ids):
-            raise FourDAnyoneError("Target conditioning has the wrong frontal-camera IDs.")
         rcp_records = camera_payload.get("rcp_cameras", [])
-        if [int(record["camera_id"]) for record in rcp_records] != list(view_plan.rcp_camera_ids):
-            raise FourDAnyoneError("RCP conditioning cameras do not match the resolved view plan.")
 
         def skeletons(camera_records: list[dict]) -> tuple[SkeletonVideo, ...]:
             return tuple(
@@ -97,13 +81,6 @@ class Conditioning:
 
         target_skeletons = skeletons(records)
         rcp_skeletons = skeletons(rcp_records)
-        required = (
-            root / metadata["source_video"],
-            *(item.path for item in (*target_skeletons, *rcp_skeletons)),
-        )
-        missing = [str(path) for path in required if not path.is_file()]
-        if missing:
-            raise FourDAnyoneError(f"Conditioning artifacts are incomplete: {missing}.")
         return cls(
             root=root,
             source_video=root / metadata["source_video"],
@@ -155,7 +132,7 @@ def _video_tensor(path: Path, num_frames: int, *, crop: Crop | None = None):
             tensor = tensor.clamp_(0.0, 1.0)
         output_frames.append(tensor.mul_(2.0).sub_(1.0))
     if len(output_frames) != num_frames:
-        raise FourDAnyoneError(f"Video {path} has {len(output_frames)} decoded frames, expected {num_frames}.")
+        raise FourDAnyoneError(f"{path}: {len(output_frames)} frames; expected {num_frames}.")
     return torch.stack(output_frames, dim=1).unsqueeze(0).contiguous()
 
 
@@ -175,17 +152,10 @@ def _load_regressor(path: Path, device):
     weights = data["weights"].detach().float().to(device)
     names = tuple(str(value) for value in data["keypoint_names"])
     if support.shape != weights.shape or support.shape[0] != 70:
-        raise AssetError(f"Unexpected MHR70 regressor shapes: support={support.shape}, weights={weights.shape}.")
+        raise AssetError(f"MHR70 shape mismatch: support={support.shape}, weights={weights.shape}.")
     if names != KEYPOINT_NAMES:
-        raise AssetError("MHR70 regressor keypoint order does not match the frozen Goliath70 schema.")
+        raise AssetError("MHR70 keypoint order mismatch.")
     return support, weights, _safe_regressor_metadata(tuple(support.shape))
-
-
-@contextmanager
-def _gvhmr_geometry_context(gvhmr_root: Path):
-    install_pytorch3d_compat()
-    with gvhmr_imports(gvhmr_root):
-        yield
 
 
 def _body_geometry(
@@ -198,22 +168,13 @@ def _body_geometry(
 ) -> _BodyGeometry:
     import torch
 
-    body_model = gvhmr_root / "inputs/checkpoints/body_models/smplx/SMPLX_NEUTRAL.npz"
-    if not body_model.is_file():
-        raise AssetError(
-            "The licensed SMPL-X body model is missing. Run `python scripts/download_smplx.py`; "
-            f"expected the GVHMR compatibility link at {body_model}."
-        )
     utility_root = gvhmr_root / "hmr4d/utils/body_model"
     smplx_to_smpl_path = utility_root / "smplx2smpl_sparse.pt"
     joint_regressor_path = utility_root / "smpl_neutral_J_regressor.pt"
-    for path in (smplx_to_smpl_path, joint_regressor_path):
-        if not path.is_file():
-            raise AssetError(f"GVHMR body-model utility is missing: {path}")
 
     torch_device = torch.device(device)
     support, weights, regressor_metadata = _load_regressor(regressor_path, torch_device)
-    with _gvhmr_geometry_context(gvhmr_root):
+    with gvhmr_imports(gvhmr_root):
         from hmr4d.utils.geo_transform import apply_T_on_points, compute_T_ayfz2ay
         from hmr4d.utils.smplx_utils import make_smplx
 
@@ -223,11 +184,6 @@ def _body_geometry(
         with torch.inference_mode():
             vertices_global = smplx(**global_parameters).vertices.detach()
             vertices_incam = smplx(**incam_parameters).vertices.detach()
-        if tuple(vertices_global.shape[1:]) != (10475, 3) or vertices_incam.shape != vertices_global.shape:
-            raise FourDAnyoneError(
-                "Expected matching global/incam SMPL-X vertices [frames,10475,3], got "
-                f"{tuple(vertices_global.shape)} and {tuple(vertices_incam.shape)}."
-            )
         keypoints_global = (vertices_global[:, support] * weights[None, :, :, None]).sum(dim=2)
         keypoints_incam = (vertices_incam[:, support] * weights[None, :, :, None]).sum(dim=2)
         smplx_to_smpl = torch.load(smplx_to_smpl_path, map_location=torch_device, weights_only=True)
@@ -345,7 +301,7 @@ def build_skeleton_conditioning(
 ) -> Conditioning:
     """Build source, RCP, and target conditioning on one camera grid."""
 
-    gvhmr_root, _ = validate_gvhmr(gvhmr_root)
+    gvhmr_root = Path(gvhmr_root).expanduser().resolve()
     root = Path(output_dir).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
 

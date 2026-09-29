@@ -39,8 +39,8 @@ class Result:
 
 def _contained_file(root: Path, relative: str) -> Path:
     path = root / relative
-    if not path.is_file() or not path.resolve().is_relative_to(root):
-        raise FourDAnyoneError(f"Missing or external result file: {relative}")
+    if not path.resolve().is_relative_to(root):
+        raise FourDAnyoneError(f"External result file: {relative}")
     return path
 
 
@@ -48,35 +48,24 @@ def read_result(directory: str | Path) -> Result:
     root = Path(directory).expanduser().resolve()
     _contained_file(root, "metadata.json")
     metadata = read_output_metadata(root)
-    try:
-        rig = json.loads(_contained_file(root, "cameras.json").read_text())
-        cameras = rig["cameras"]
-        if rig.get("camera_model") != "OPENCV" or not isinstance(cameras, list) or not cameras:
-            raise ValueError("Expected a nonempty OPENCV camera rig")
-        if rig["world_frame"]["name"] != "canonical_human_world" or rig["camera_frame"]["name"] != "opencv_camera":
-            raise ValueError("Unsupported camera coordinate system")
-        if [camera["camera_id"] for camera in cameras] != list(range(len(cameras))):
-            raise ValueError("Cameras must be ordered by camera ID")
-        fps = Fraction(metadata["output"]["fps"])
-        frames = int(metadata["output"]["frames_per_video"])
-        if fps <= 0 or frames != 121 or metadata["output"]["target_views"] != len(cameras):
-            raise ValueError("Output does not describe synchronized 121-frame videos")
-        videos = read_target_videos(root, cameras)
-        for camera in cameras:
-            intrinsic = np.asarray(camera["K"], dtype=np.float64)
-            transform = np.asarray(camera["camera_to_world"], dtype=np.float64)
-            if (
-                intrinsic.shape != (3, 3)
-                or transform.shape != (4, 4)
-                or not np.isfinite(intrinsic).all()
-                or not np.isfinite(transform).all()
-                or not np.allclose(transform[3], [0, 0, 0, 1])
-            ):
-                raise ValueError(f"Invalid calibration for camera {camera['camera_id']}")
-            if min(camera["image_width"], camera["image_height"]) <= 0:
-                raise ValueError("Invalid camera image dimensions")
-    except (OSError, ValueError, TypeError, KeyError, ZeroDivisionError) as exc:
-        raise FourDAnyoneError(f"Cannot open this 4DAnyone output: {exc}") from exc
+    rig = json.loads(_contained_file(root, "cameras.json").read_text())
+    cameras = rig["cameras"]
+    fps = Fraction(metadata["output"]["fps"])
+    frames = int(metadata["output"]["frames_per_video"])
+    if fps <= 0 or frames != 121 or metadata["output"]["target_views"] != len(cameras):
+        raise ValueError("Expected synchronized 121-frame output.")
+    videos = read_target_videos(root, cameras)
+    for camera in cameras:
+        intrinsic = np.asarray(camera["K"], dtype=np.float64)
+        transform = np.asarray(camera["camera_to_world"], dtype=np.float64)
+        if (
+            intrinsic.shape != (3, 3)
+            or transform.shape != (4, 4)
+            or not np.isfinite(intrinsic).all()
+            or not np.isfinite(transform).all()
+            or not np.allclose(transform[3], [0, 0, 0, 1])
+        ):
+            raise ValueError(f"Invalid camera calibration: {camera['camera_id']}")
     return Result(root, metadata, tuple(cameras), videos, fps, frames)
 
 
@@ -88,22 +77,16 @@ def _target_video(result: Result, camera_id: int, destination: Path, check_cance
     if destination.exists():
         return size
     temporary = destination.with_name(f".{destination.stem}-{uuid.uuid4().hex}.mp4")
-    count = 0
     try:
         with av.open(str(result.videos[camera_id])) as source:
-            source.streams.video[0].codec_context.thread_count = 2
-            if source.streams.video[0].average_rate != result.fps:
-                raise FourDAnyoneError(f"Camera {camera_id} video FPS does not match its metadata.")
-            for count, frame in enumerate(source.decode(video=0), start=1):
-                check_cancelled()
-                if count > result.frames:
-                    raise FourDAnyoneError(f"Camera {camera_id} has more than {result.frames} frames.")
-                if (frame.width, frame.height) != (camera["image_width"], camera["image_height"]):
-                    raise FourDAnyoneError(f"Camera {camera_id} video dimensions do not match its calibration.")
-        if count != result.frames:
-            raise FourDAnyoneError(f"Camera {camera_id} has {count} frames; expected {result.frames}.")
+            video = source.streams.video[0]
+            if video.average_rate != result.fps:
+                raise FourDAnyoneError(f"Camera {camera_id} FPS mismatch: {video.average_rate} != {result.fps}")
+            if (video.width, video.height) != size:
+                raise FourDAnyoneError(f"Camera {camera_id} dimensions mismatch: {(video.width, video.height)} != {size}")
         check_cancelled()
         shutil.copyfile(result.videos[camera_id], temporary)
+        check_cancelled()
         temporary.replace(destination)
     finally:
         temporary.unlink(missing_ok=True)
@@ -418,8 +401,6 @@ def export_layout_update(info: dict, cache_dir: Path, layout: dict) -> tuple[Pat
 
     import rerun as rr
 
-    if info["target_count"]:
-        raise FourDAnyoneError("Saved result cameras are read-only.")
     cameras = layout_cameras(info["context"], layout)
     destination = cache_dir / f"layout-{uuid.uuid4().hex}.rrd"
     cache_dir.mkdir(parents=True, exist_ok=True)

@@ -29,24 +29,14 @@ _BODY_CENTER_NAMES = ("left-shoulder", "right-shoulder", "left-hip", "right-hip"
 
 
 def _name_index(names) -> dict[str, int]:
-    normalized = [str(name).strip().lower().replace("_", "-") for name in names]
-    mapping = dict(zip(normalized, range(len(normalized)), strict=True))
-    if len(mapping) != len(normalized):
-        raise ValueError("Keypoint names must be unique after normalization.")
-    return mapping
+    return {str(name).strip().lower().replace("_", "-"): index for index, name in enumerate(names)}
 
 
 def estimate_body_height(keypoints_3d: np.ndarray, names) -> float:
     """Robustly infer physical body height from stable anatomical segments."""
 
     points = np.asarray(keypoints_3d, dtype=np.float64)
-    if points.ndim != 3 or points.shape[1:] != (len(names), 3):
-        raise ValueError(f"Expected keypoints [frames,{len(names)},3], got {points.shape}.")
     mapping = _name_index(names)
-    required = {name for first, second, _ in _BODY_SCALE_SEGMENTS for group in (first, second) for name in group}
-    missing = sorted(required - mapping.keys())
-    if missing:
-        raise ValueError(f"Missing body-scale keypoints: {missing}.")
 
     frame_heights = []
     for frame in points:
@@ -62,7 +52,7 @@ def estimate_body_height(keypoints_3d: np.ndarray, names) -> float:
     heights = np.asarray(frame_heights, dtype=np.float64)
     heights = heights[np.isfinite(heights) & (heights > 0)]
     if not heights.size:
-        raise ValueError("Cannot estimate body height from the supplied keypoints.")
+        raise ValueError("No valid body-height segments.")
     if heights.size >= 5:
         lower, upper = np.percentile(heights, [10.0, 90.0])
         trimmed = heights[(heights >= lower) & (heights <= upper)]
@@ -80,16 +70,7 @@ def projected_body_scales(
     """Convert physical body height and camera depth to per-frame pixel scale."""
 
     depths = np.asarray(keypoint_depths, dtype=np.float64)
-    if depths.ndim != 2 or depths.shape[1] != len(names):
-        raise ValueError(f"Expected keypoint depths [frames,{len(names)}], got {depths.shape}.")
-    if not np.isfinite(body_height_3d) or body_height_3d <= 0:
-        raise ValueError("body_height_3d must be positive and finite.")
-    if not np.isfinite(focal_px) or focal_px <= 0:
-        raise ValueError("focal_px must be positive and finite.")
     mapping = _name_index(names)
-    missing = [name for name in _BODY_CENTER_NAMES if name not in mapping]
-    if missing:
-        raise ValueError(f"Missing body-center keypoints: {missing}.")
     center_depths = depths[:, [mapping[name] for name in _BODY_CENTER_NAMES]]
     valid = np.isfinite(center_depths) & (center_depths > 1e-6)
     counts = valid.sum(axis=1)

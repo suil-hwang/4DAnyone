@@ -233,16 +233,7 @@ class Resample(nn.Module):
 def patchify(x, patch_size):
     if patch_size == 1:
         return x
-    if x.dim() == 4:
-        x = rearrange(x, "b c (h q) (w r) -> b (c r q) h w", q=patch_size, r=patch_size)
-    elif x.dim() == 5:
-        x = rearrange(x,
-                      "b c f (h q) (w r) -> b (c r q) f h w",
-                      q=patch_size,
-                      r=patch_size)
-    else:
-        raise ValueError(f"Invalid input shape: {x.shape}")
-    return x
+    return rearrange(x, "b c ... (h q) (w r) -> b (c r q) ... h w", q=patch_size, r=patch_size)
 
 
 def unpatchify(x, patch_size):
@@ -1138,16 +1129,12 @@ class WanVideoVAE(nn.Module):
     def encode_view(self, video):
         """Encode one device-resident ``[1,C,F,H,W]`` view."""
 
-        if video.ndim != 5 or video.shape[0] != 1:
-            raise ValueError(f"VAE encode expects one batched view, got {tuple(video.shape)}.")
         return self.model.encode(video, self.scale)
 
 
     def decode_view(self, hidden_state):
         """Decode one device-resident ``[1,C,F,H,W]`` latent view."""
 
-        if hidden_state.ndim != 5 or hidden_state.shape[0] != 1:
-            raise ValueError(f"VAE decode expects one batched view, got {tuple(hidden_state.shape)}.")
         return self.model.decode(hidden_state, self.scale).clamp_(-1, 1)
 
 

@@ -35,7 +35,7 @@ class PerceptualSplatfactoModel(SplatfactoModel):
     def populate_modules(self) -> None:
         super().populate_modules()
         if self.config.perceptual_loss_weight < 0:
-            raise ValueError("perceptual_loss_weight must be non-negative.")
+            raise ValueError("perceptual_loss_weight must be >= 0.")
         weights_path = Path(self.config.perceptual_weights_path).expanduser()
         if self.config.perceptual_loss_weight > 0 and weights_path == Path("models") / PERCEPTUAL_VGG19:
             weights_path = ensure_perceptual_vgg19()

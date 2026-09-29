@@ -20,8 +20,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
-from fdanyone.errors import ConfigurationError, FourDAnyoneError
-from fdanyone.model.routing import CameraGroup, Routes, StepGroups, validate_routes
+from fdanyone.errors import ConfigurationError
+from fdanyone.model.routing import CameraGroup, Routes, StepGroups
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -62,8 +62,6 @@ class DistributedDenoiseRequest:
 def worker_count_for_groups(num_groups: int, max_workers: int) -> int:
     """Use fewer workers when that balances groups without adding waves."""
 
-    if num_groups <= 0 or max_workers <= 0:
-        raise ValueError(f"num_groups and max_workers must be positive, got {num_groups} and {max_workers}.")
     workers = min(num_groups, max_workers)
     waves = math.ceil(num_groups / workers)
     for candidate in range(workers, 0, -1):
@@ -75,8 +73,6 @@ def worker_count_for_groups(num_groups: int, max_workers: int) -> int:
 def select_worker_devices(devices: Sequence[str], num_groups: int) -> tuple[str, ...]:
     """Choose the largest balanced GPU prefix that does not add a wave."""
 
-    if not devices:
-        raise ValueError("At least one candidate GPU is required.")
     return tuple(devices[: worker_count_for_groups(num_groups, len(devices))])
 
 
@@ -86,17 +82,12 @@ def require_nccl() -> None:
     import torch.distributed as dist
 
     if not (dist.is_available() and dist.is_nccl_available()):
-        raise ConfigurationError(
-            "Multi-GPU target denoising requires NCCL. "
-            "Use --gpu_ids=[0] on native Windows, or an NCCL-enabled PyTorch build on Linux or WSL2."
-        )
+        raise ConfigurationError("Multi-GPU denoising requires NCCL; use one GPU on Windows.")
 
 
 def group_waves(groups: Sequence[CameraGroup], num_workers: int) -> tuple[StepGroups, ...]:
     """Split one routing step into waves that fit the available workers."""
 
-    if num_workers <= 0:
-        raise ValueError(f"num_workers must be positive, got {num_workers}.")
     return tuple(tuple(groups[start : start + num_workers]) for start in range(0, len(groups), num_workers))
 
 
@@ -110,10 +101,8 @@ def _resolve_empty_workspace(path: str | Path) -> Path:
     """Validate the caller-owned transient directory used by spawned ranks."""
 
     root = Path(path).expanduser().resolve()
-    if not root.is_dir():
-        raise ValueError(f"Distributed work_dir must be an existing directory: {root}")
     if any(root.iterdir()):
-        raise ValueError(f"Distributed work_dir must be empty: {root}")
+        raise ValueError(f"Distributed workspace is not empty: {root}")
     return root
 
 
@@ -123,8 +112,6 @@ def _write_pose_feature_file(pose_features: PoseFeatureBank, path: Path) -> tupl
     import torch
 
     features = pose_features.features
-    if features.ndim != 5 or features.shape[0] <= 0:
-        raise FourDAnyoneError("Distributed target denoising requires at least one pose feature.")
     shape = tuple(features.shape)
     numel = math.prod(shape)
     with path.open("xb") as handle:
@@ -171,8 +158,6 @@ class _WorkerState:
         )
         scatter_list = None
         if self.is_primary:
-            if self.latents is None:
-                raise RuntimeError("The primary distributed rank does not own canonical latents.")
             scatter_list = [torch.zeros_like(local_input) for _ in range(self.world_size)]
             for worker_index, group in enumerate(wave):
                 index = torch.tensor(group, dtype=torch.long, device="cpu")
@@ -210,8 +195,6 @@ class _WorkerState:
         dist.gather(local_result, gather_list=gathered, dst=0)
         if not self.is_primary:
             return
-        if self.latents is None or gathered is None:
-            raise RuntimeError("The primary distributed rank cannot commit gathered latents.")
         for group, result in zip(wave, gathered[: len(wave)], strict=True):
             index = torch.tensor(group, dtype=torch.long, device="cpu")
             self.latents.index_copy_(0, index, result.to("cpu"))
@@ -274,8 +257,6 @@ def _publish_worker_result(state: _WorkerState, report: WorkerReport) -> None:
 
     root = Path(state.request.work_dir)
     if state.is_primary:
-        if state.latents is None:
-            raise RuntimeError("The primary distributed rank has no target latents to publish.")
         temporary = root / ".target_latents.pt.tmp"
         torch.save(state.latents, temporary)
         os.replace(temporary, root / "target_latents.pt")
@@ -364,15 +345,7 @@ def denoise_targets_distributed(
     import torch.multiprocessing as mp
 
     devices = tuple(devices)
-    if len(devices) < 2:
-        raise ValueError("Distributed denoising requires at least two GPUs.")
     require_nccl()
-    validate_routes(routes, int(initial_latents.shape[0]))
-    if len(routes) != denoising_profile.num_inference_steps:
-        raise ValueError(
-            f"Denoising profile {denoising_profile.name!r} requires "
-            f"{denoising_profile.num_inference_steps} routing steps, got {len(routes)}."
-        )
     num_groups = len(routes[0])
 
     root = _resolve_empty_workspace(work_dir)
@@ -406,19 +379,12 @@ def denoise_targets_distributed(
         num_groups,
         math.ceil(num_groups / len(devices)),
     )
-    try:
-        mp.spawn(_worker, args=(request,), nprocs=len(devices), join=True)
-    except Exception as exc:
-        raise FourDAnyoneError(f"Multi-GPU target denoising failed: {exc}") from exc
+    mp.spawn(_worker, args=(request,), nprocs=len(devices), join=True)
 
     output_path = root / "target_latents.pt"
-    if not output_path.is_file():
-        raise FourDAnyoneError("Multi-GPU target denoising finished without publishing target latents.")
     latents = torch.load(output_path, map_location="cpu", weights_only=True)
     reports: list[WorkerReport] = []
     for rank in range(len(devices)):
         report_path = root / f"rank-{rank}.json"
-        if not report_path.is_file():
-            raise FourDAnyoneError(f"Multi-GPU worker {rank} did not publish its runtime report.")
         reports.append(json.loads(report_path.read_text()))
     return latents, reports

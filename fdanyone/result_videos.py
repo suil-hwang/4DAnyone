@@ -17,10 +17,10 @@ def read_target_videos(root: Path, cameras: list[dict]) -> tuple[Path, ...]:
     """Read the canonical camera-indexed videos, contained within the result."""
 
     if not cameras or [camera.get("camera_id") for camera in cameras] != list(range(len(cameras))):
-        raise FourDAnyoneError("Target cameras must be ordered by camera ID.")
+        raise FourDAnyoneError("Camera IDs must be consecutive and ordered.")
     layout = tuple(target_video_path(index) for index in range(len(cameras)))
     if tuple(camera.get("video") for camera in cameras) != tuple(str(path) for path in layout):
-        raise FourDAnyoneError("Camera video paths must use the videos/<camera_id>.mp4 layout.")
+        raise FourDAnyoneError("Video paths must match videos/<camera_id>.mp4.")
 
     root = root.resolve()
     paths = tuple(root / relative for relative in layout)

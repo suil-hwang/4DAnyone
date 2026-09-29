@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from fdanyone.config import INFERENCE
 from fdanyone.device import CUDA_ALLOCATOR_CONF
-from fdanyone.errors import FourDAnyoneError
 from fdanyone.result_videos import target_video_path
 
 if TYPE_CHECKING:
@@ -81,19 +80,6 @@ def _camera_rig_payload(payload: dict, cameras: list[dict]) -> dict:
     }
 
 
-def _target_cameras(payload: object, expected_count: int) -> list[dict]:
-    """Read the camera records produced by the conditioning stage."""
-
-    if not isinstance(payload, dict) or payload.get("camera_model") != "OPENCV":
-        raise FourDAnyoneError("Conditioning did not produce an OpenCV camera rig.")
-    cameras = payload.get("cameras")
-    if not isinstance(cameras, list) or len(cameras) != expected_count:
-        raise FourDAnyoneError(f"Conditioning must contain {expected_count} target cameras.")
-    if [camera.get("camera_id") for camera in cameras if isinstance(camera, dict)] != list(range(expected_count)):
-        raise FourDAnyoneError("Target cameras are not in canonical order.")
-    return cameras
-
-
 def write_output(
     *,
     clip: ClipInfo,
@@ -109,30 +95,19 @@ def write_output(
     root = Path(destination).expanduser().resolve()
     attention_backend = generated.attention_backend
     view_plan = generated.view_plan
-    if conditioning.view_plan != view_plan:
-        raise FourDAnyoneError("Conditioning and generation resolved different view plans.")
-    if len(generated.target_videos) != view_plan.num_target_views:
-        raise FourDAnyoneError(
-            f"Generation returned {len(generated.target_videos)} target videos, expected {view_plan.num_target_views}."
-        )
-    if len(conditioning.target_skeletons) != view_plan.num_target_views:
-        raise FourDAnyoneError(
-            f"Conditioning returned {len(conditioning.target_skeletons)} target skeletons, "
-            f"expected {view_plan.num_target_views}."
-        )
-
     videos_root = root / "videos"
     skeletons_root = root / "skeletons"
     videos_root.mkdir(parents=True, exist_ok=False)
     skeletons_root.mkdir(exist_ok=False)
-    for camera_id, source in enumerate(generated.target_videos):
+    for camera_id, source, skeleton in zip(
+        range(view_plan.num_target_views), generated.target_videos, conditioning.target_skeletons, strict=True
+    ):
         shutil.copy2(source, root / target_video_path(camera_id))
-    for camera_id, skeleton in enumerate(conditioning.target_skeletons):
         shutil.copy2(skeleton.path, skeletons_root / f"{camera_id:02d}.mp4")
 
     camera_payload = json.loads((conditioning.root / "cameras.json").read_text())
     conditioning_metadata = json.loads((conditioning.root / "metadata.json").read_text())
-    camera_records = _target_cameras(camera_payload, view_plan.num_target_views)
+    camera_records = camera_payload["cameras"]
     total_elapsed = time.monotonic() - pipeline_started
     generation_metadata = {
         "seed": generated.seed,

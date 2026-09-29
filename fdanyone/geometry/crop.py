@@ -1,5 +1,4 @@
-"""Deterministic source-mask and center-aspect crops."""
-
+# fdanyone/geometry/crop.py
 from __future__ import annotations
 
 import math
@@ -32,10 +31,10 @@ def center_crop(image_height: int, image_width: int, output_height: int, output_
     aspect_ratio = output_height / output_width
     if image_height / image_width >= aspect_ratio:
         crop_width = image_width
-        crop_height = min(image_height, max(1, int(round(crop_width * aspect_ratio))))
+        crop_height = min(image_height, max(1, round(crop_width * aspect_ratio)))
     else:
         crop_height = image_height
-        crop_width = min(image_width, max(1, int(round(crop_height / aspect_ratio))))
+        crop_width = min(image_width, max(1, round(crop_height / aspect_ratio)))
     return Crop(
         top=(image_height - crop_height) // 2,
         left=(image_width - crop_width) // 2,
@@ -71,10 +70,10 @@ def expand_bounds(bounds, margins, image_height: int, image_width: int):
     top, right, bottom, left = (float(value) for value in margins)
     box_width, box_height = xmax - xmin, ymax - ymin
     return (
-        max(0, int(math.floor(xmin - left * box_width))),
-        max(0, int(math.floor(ymin - top * box_height))),
-        min(image_width, int(math.ceil(xmax + right * box_width))),
-        min(image_height, int(math.ceil(ymax + bottom * box_height))),
+        max(0, math.floor(xmin - left * box_width)),
+        max(0, math.floor(ymin - top * box_height)),
+        min(image_width, math.ceil(xmax + right * box_width)),
+        min(image_height, math.ceil(ymax + bottom * box_height)),
     )
 
 
@@ -102,21 +101,21 @@ def crop_from_bounds(
     aspect_ratio = output_height / output_width
     crop_height = max(required_height, required_width * aspect_ratio)
     max_height = min(float(image_height), float(image_width) * aspect_ratio)
-    crop_height = max(1, min(image_height, int(math.ceil(min(crop_height, max_height)))))
-    crop_width = max(1, min(image_width, int(math.ceil(crop_height / aspect_ratio))))
+    crop_height = max(1, min(image_height, math.ceil(min(crop_height, max_height))))
+    crop_width = max(1, min(image_width, math.ceil(crop_height / aspect_ratio)))
 
     left_low = max(0.0, xmax - crop_width)
     left_high = min(float(xmin), image_width - crop_width)
     top_low = max(0.0, ymax - crop_height)
     top_high = min(float(ymin), image_height - crop_height)
     if left_low <= left_high:
-        left = int(math.floor((left_low + left_high) / 2.0))
+        left = math.floor((left_low + left_high) / 2.0)
     else:
-        left = max(0, min(int(math.floor((xmin + xmax - crop_width) / 2.0)), image_width - crop_width))
+        left = max(0, min(math.floor((xmin + xmax - crop_width) / 2.0), image_width - crop_width))
     if top_low <= top_high:
-        top = int(math.floor((top_low + top_high) / 2.0))
+        top = math.floor((top_low + top_high) / 2.0)
     else:
-        top = max(0, min(int(math.floor((ymin + ymax - crop_height) / 2.0)), image_height - crop_height))
+        top = max(0, min(math.floor((ymin + ymax - crop_height) / 2.0), image_height - crop_height))
     return Crop(
         top=top,
         left=left,

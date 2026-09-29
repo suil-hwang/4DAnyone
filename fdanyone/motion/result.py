@@ -36,89 +36,57 @@ class MotionResult:
         return len(self.frame_timestamps_sec)
 
     def validate(self, expected_frames: int = 121) -> None:
-        try:
-            import torch
-        except ImportError as exc:
-            raise FourDAnyoneError("PyTorch is required to validate motion tensors.") from exc
+        import torch
+
         if self.motion_world != "gvhmr_gravity_aligned_y_up":
-            raise FourDAnyoneError(f"Unknown motion world convention: {self.motion_world!r}.")
-        if (
-            not isinstance(self.gvhmr_revision, str)
-            or len(self.gvhmr_revision) != 40
-            or any(character not in "0123456789abcdef" for character in self.gvhmr_revision.lower())
-        ):
-            raise FourDAnyoneError("MotionResult requires a 40-character GVHMR git revision.")
-        if self.fps <= 0:
-            raise FourDAnyoneError(f"MotionResult FPS must be positive, got {self.fps}.")
+            raise FourDAnyoneError(f"Unsupported motion coordinates: {self.motion_world!r}.")
         if self.num_frames != expected_frames:
-            raise FourDAnyoneError(f"MotionResult has {self.num_frames} frames, expected {expected_frames}.")
-        for name, values in (
-            ("source_frame_indices", self.source_frame_indices),
-            ("source_pts", self.source_pts),
-        ):
-            if len(values) != self.num_frames:
-                raise FourDAnyoneError(f"MotionResult {name} has {len(values)} values, expected {self.num_frames}.")
-        expected_timestamps = tuple(float(Fraction(index, 1) / self.fps) for index in range(self.num_frames))
-        if self.frame_timestamps_sec != expected_timestamps:
-            raise FourDAnyoneError("MotionResult timestamps are not the exact zero-based CFR timeline.")
+            raise FourDAnyoneError(f"Motion frames: {self.num_frames}; expected {expected_frames}.")
         if any(index < 0 for index in self.source_frame_indices) or any(
             right < left for left, right in zip(self.source_frame_indices, self.source_frame_indices[1:], strict=False)
         ):
-            raise FourDAnyoneError("MotionResult source-frame indices must be non-negative and monotonic.")
-        if self.source_size_bytes <= 0 or self.source_mtime_ns <= 0:
-            raise FourDAnyoneError("MotionResult has an invalid source-file identity.")
-        if self.image_height <= 0 or self.image_width <= 0:
-            raise FourDAnyoneError("MotionResult image dimensions must be positive.")
+            raise FourDAnyoneError("Source indices must be non-negative and ordered.")
         for group_name, parameters in (
             ("smpl_params_global", self.smpl_params_global),
             ("smpl_params_incam", self.smpl_params_incam),
         ):
-            if set(parameters) != set(SMPL_PARAMETER_NAMES):
-                raise FourDAnyoneError(
-                    f"MotionResult {group_name} must contain {SMPL_PARAMETER_NAMES}, got {tuple(parameters)}."
-                )
             for name, tensor in parameters.items():
                 expected_shape = (self.num_frames, SMPL_PARAMETER_WIDTHS[name])
-                if not isinstance(tensor, torch.Tensor) or tuple(tensor.shape) != expected_shape:
-                    raise FourDAnyoneError(f"{group_name}.{name} must have shape {expected_shape}.")
+                if tuple(tensor.shape) != expected_shape:
+                    raise FourDAnyoneError(f"{group_name}.{name} shape must be {expected_shape}.")
                 if not bool(torch.isfinite(tensor).all()):
-                    raise FourDAnyoneError(f"{group_name}.{name} contains non-finite values.")
-        if not isinstance(self.K_fullimg, torch.Tensor) or tuple(self.K_fullimg.shape) != (self.num_frames, 3, 3):
-            raise FourDAnyoneError(f"K_fullimg must have shape ({self.num_frames}, 3, 3).")
+                    raise FourDAnyoneError(f"{group_name}.{name}: non-finite values.")
+        if tuple(self.K_fullimg.shape) != (self.num_frames, 3, 3):
+            raise FourDAnyoneError(f"K_fullimg shape must be ({self.num_frames}, 3, 3).")
         if not bool(torch.isfinite(self.K_fullimg).all()):
-            raise FourDAnyoneError("K_fullimg contains non-finite values.")
+            raise FourDAnyoneError("K_fullimg: non-finite values.")
         expected_keypoint_shape = (self.num_frames, 17, 3)
-        if (
-            not isinstance(self.observed_keypoints_2d, torch.Tensor)
-            or tuple(self.observed_keypoints_2d.shape) != expected_keypoint_shape
-        ):
-            raise FourDAnyoneError(f"observed_keypoints_2d must have shape {expected_keypoint_shape}.")
+        if tuple(self.observed_keypoints_2d.shape) != expected_keypoint_shape:
+            raise FourDAnyoneError(f"observed_keypoints_2d shape must be {expected_keypoint_shape}.")
         if not bool(torch.isfinite(self.observed_keypoints_2d).all()):
-            raise FourDAnyoneError("observed_keypoints_2d contains non-finite values.")
+            raise FourDAnyoneError("observed_keypoints_2d: non-finite values.")
 
     def validate_against_clip(self, clip) -> None:
         """Reject a cached result produced from a different video timeline."""
 
-        self.validate(expected_frames=len(clip.frames))
         expected_timestamps = tuple(float(frame.canonical_timestamp) for frame in clip.frames)
         expected_indices = tuple(frame.source_index for frame in clip.frames)
         expected_pts = tuple(frame.source_pts for frame in clip.frames)
         if self.fps != clip.fps:
-            raise FourDAnyoneError(f"Motion FPS {self.fps} does not match canonical FPS {clip.fps}.")
+            raise FourDAnyoneError(f"Motion FPS mismatch: {self.fps} != {clip.fps}.")
         if self.frame_timestamps_sec != expected_timestamps:
-            raise FourDAnyoneError("Motion timestamps do not match the canonical clip.")
+            raise FourDAnyoneError("Motion timestamps mismatch.")
         if self.source_frame_indices != expected_indices or self.source_pts != expected_pts:
-            raise FourDAnyoneError("Motion source-frame identity does not match the canonical clip.")
+            raise FourDAnyoneError("Motion source frames/PTS mismatch.")
         if (self.source_size_bytes, self.source_mtime_ns) != (
             clip.source_size_bytes,
             clip.source_mtime_ns,
         ):
-            raise FourDAnyoneError("Cached GVHMR motion belongs to a different source file.")
+            raise FourDAnyoneError("Motion source file mismatch.")
 
     def save(self, directory: str | Path) -> Path:
         from safetensors.torch import save_file
 
-        self.validate()
         root = Path(directory).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
         tensor_path = root / "motion.safetensors"

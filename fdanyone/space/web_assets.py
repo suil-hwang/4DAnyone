@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import importlib.metadata
 import re
 import tempfile
 import threading
@@ -54,9 +53,6 @@ def prepare_web_assets(cache_dir: Path) -> dict:
     import gradio as gr
     import gradio_rerun
 
-    version = importlib.metadata.version("gradio-rerun")
-    if version != VERSION:
-        raise FourDAnyoneError(f"The Space viewer needs gradio-rerun=={VERSION}; found {version}.")
     directory = cache_dir / "web-viewer" / VERSION
     destination = directory / "re_viewer_bg.wasm"
     with _LOCK:
@@ -64,13 +60,9 @@ def prepare_web_assets(cache_dir: Path) -> dict:
             directory.mkdir(parents=True, exist_ok=True)
             package = Path(gradio_rerun.__file__).parent / "templates/component/index.js"
             match = re.search(r"data:application/wasm;base64,([A-Za-z0-9+/=]+)", package.read_text(encoding="utf-8"))
-            if match is None:
-                raise FourDAnyoneError(
-                    "Cannot locate the installed Rerun viewer runtime. Reinstall requirements-gui.txt."
-                )
             data = base64.b64decode(match[1], validate=True)
             if hashlib.sha256(data).hexdigest() != WASM_SHA256:
-                raise FourDAnyoneError("The installed Rerun viewer runtime does not match this Space version.")
+                raise FourDAnyoneError("Rerun viewer runtime SHA-256 mismatch.")
             temporary = directory / f".{uuid.uuid4().hex}.wasm"
             try:
                 temporary.write_bytes(data)

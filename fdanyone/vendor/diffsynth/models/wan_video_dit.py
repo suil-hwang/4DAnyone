@@ -224,8 +224,6 @@ class RMSNorm(nn.Module):
 
         if torch.is_grad_enabled():
             return self.forward(x)
-        if not x.is_contiguous():
-            raise ValueError("In-place RMSNorm requires a contiguous projection buffer.")
 
         rows = x.view(-1, x.shape[-1])
         fp32_bytes_per_row = x.shape[-1] * torch.empty((), dtype=torch.float32).element_size()
@@ -530,21 +528,14 @@ class FourDAnyoneDiT(nn.Module):
         sources: torch.Tensor,
         grid_size: tuple[int, int, int],
     ) -> tuple[torch.Tensor, int]:
-        source_views = int(sources.shape[0])
-        if source_views == 1:
-            primary_source = sources
-            reference_sources = None
-        elif source_views == 5:
-            primary_source = sources[:1]
-            reference_sources = sources[1:]
-        else:
-            raise ValueError(f"4DAnyone requires 1 or 5 source views, got {source_views}.")
+        primary_source = sources[:1]
+        reference_sources = sources[1:]
 
         primary_tokens, _ = self._patchify(primary_source)
         x = torch.cat([x, primary_tokens], dim=0)
         packed_views = 1
 
-        if reference_sources is not None:
+        if reference_sources.shape[0]:
             projection = self.viewpack_embedding.proj_2x
             reference_sources = pad_for_3d_conv(reference_sources, projection.kernel_size)
             packed = projection(reference_sources)
@@ -566,8 +557,6 @@ class FourDAnyoneDiT(nn.Module):
         if pose_features.device == x.device:
             x.add_(rearrange(pose_features, "v c f h w -> v (f h w) c"))
             return
-        if pose_features.device.type != "cpu":
-            raise ValueError(f"Inference pose features must be on CPU or {x.device}, got {pose_features.device}.")
         staging = torch.empty(
             pose_features.shape[1:],
             dtype=x.dtype,
@@ -587,16 +576,7 @@ class FourDAnyoneDiT(nn.Module):
         packed_views: int,
         grid_size: tuple[int, int, int],
     ) -> torch.Tensor:
-        frames, height, width = grid_size
-        expected_pose = (target_views, MODEL_DIM, frames, height, width)
-        expected_null = (packed_views, MODEL_DIM, frames, height, width)
-        if tuple(pose_features.shape) != expected_pose:
-            raise ValueError(f"Expected pose features {expected_pose}, got {tuple(pose_features.shape)}.")
-        if tuple(null_pose_feature.shape) != expected_null:
-            raise ValueError(f"Expected null pose features {expected_null}, got {tuple(null_pose_feature.shape)}.")
         if torch.is_grad_enabled():
-            if pose_features.device != x.device or null_pose_feature.device != x.device:
-                raise ValueError("Training requires pose features on the same device as patch tokens.")
             pose_tokens = rearrange(pose_features, "v c f h w -> v (f h w) c")
             null_tokens = rearrange(null_pose_feature, "v c f h w -> v (f h w) c")
             return torch.cat([x[:target_views] + pose_tokens, x[target_views:] + null_tokens], dim=0)

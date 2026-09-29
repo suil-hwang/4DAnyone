@@ -40,21 +40,16 @@ def lock_output(path: Path):
         # Reject symlinks and replaced files even when O_NOFOLLOW is unavailable.
         entry = lock_path.stat(follow_symlinks=False)
         if not stat.S_ISREG(entry.st_mode) or not os.path.samestat(entry, os.fstat(descriptor)):
-            raise FourDAnyoneError(f"Output lock must be a regular file: {lock_path}.")
-        try:
-            if os.name == "nt":
-                import msvcrt
+            raise FourDAnyoneError(f"Invalid output lock file: {lock_path}.")
+        if os.name == "nt":
+            import msvcrt
 
-                # A newly opened descriptor starts at byte zero, even in an empty file.
-                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
+            # A newly opened descriptor starts at byte zero, even in an empty file.
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
 
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
-                raise
-            raise FourDAnyoneError(f"Another inference run is using {path}.") from exc
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
 
 
@@ -79,15 +74,12 @@ def write_json(path: str | Path, value: object, *, sort_keys: bool = True) -> No
 def remove_tree(
     path: str | Path,
     *,
-    attempts: int = 8,
-    initial_delay_seconds: float = 0.1,
     ignore_errors: bool = False,
 ) -> None:
     """Remove a tree, tolerating short directory-entry lag on network filesystems."""
 
     target = Path(path)
-    if attempts <= 0:
-        raise ValueError(f"attempts must be positive, got {attempts}.")
+    attempts = 8
     for attempt in range(attempts):
         try:
             shutil.rmtree(target)
@@ -100,7 +92,7 @@ def remove_tree(
                 if ignore_errors:
                     return
                 raise
-            time.sleep(initial_delay_seconds * (2**attempt))
+            time.sleep(0.1 * (2**attempt))
 
 
 class AtomicResultDirectory(AbstractContextManager[Path]):
@@ -111,24 +103,17 @@ class AtomicResultDirectory(AbstractContextManager[Path]):
         self.working = self.destination.with_name(f".{self.destination.name}.work-{uuid.uuid4().hex[:10]}")
         self._committed = False
 
-    def _destination_exists(self) -> bool:
-        return os.path.lexists(self.destination)
-
     def __enter__(self) -> Path:
-        if self._destination_exists():
-            raise FourDAnyoneError(
-                f"Output directory already exists: {self.destination}. Choose a new directory to avoid mixed runs."
-            )
+        if os.path.lexists(self.destination):
+            raise FourDAnyoneError(f"Output already exists: {self.destination}.")
         self.working.mkdir(parents=True)
         return self.working
 
     def commit(self) -> Path:
         if self._committed:
             return self.destination
-        if self._destination_exists():
-            raise FourDAnyoneError(
-                f"Output directory appeared during inference: {self.destination}. Refusing to overwrite it."
-            )
+        if os.path.lexists(self.destination):
+            raise FourDAnyoneError(f"Output appeared during inference: {self.destination}.")
         os.replace(self.working, self.destination)
         self._committed = True
         return self.destination

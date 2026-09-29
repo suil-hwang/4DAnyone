@@ -25,14 +25,6 @@ def predict_foreground_masks(
     from torchvision.transforms.functional import to_pil_image
     from transformers import AutoModelForImageSegmentation
 
-    if not frames:
-        raise ValueError("Foreground inference requires at least one frame.")
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive.")
-    shape = frames[0].shape
-    if any(frame.dtype != np.uint8 or frame.shape != shape for frame in frames):
-        raise ValueError("Foreground frames must share one RGB uint8 raster.")
-
     model = AutoModelForImageSegmentation.from_pretrained(
         str(Path(model_path).expanduser().resolve()),
         local_files_only=True,

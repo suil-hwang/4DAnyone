@@ -12,7 +12,7 @@ from pathlib import Path
 import av
 
 from fdanyone.config import INFERENCE
-from fdanyone.errors import ConfigurationError, FourDAnyoneError
+from fdanyone.errors import FourDAnyoneError
 from fdanyone.video import _decode_frames, _rotation_degrees, _stream_rate, choose_canonical_fps, validate_clip_options
 
 
@@ -165,7 +165,7 @@ def encode_source(
                     elif current.index < indices[count]:
                         current = next(frames)
                     else:
-                        raise FourDAnyoneError("The source video does not match the saved motion timeline.")
+                        raise FourDAnyoneError("Source and motion timelines differ.")
             else:
                 origin = float(previous.timestamp) + start_time
                 current = previous
@@ -186,7 +186,7 @@ def encode_source(
                 ) <= 0.75 / float(fps):
                     write(current)
             if not count:
-                raise FourDAnyoneError("No source frames are available after Clip Start.")
+                raise FourDAnyoneError("No source frames after Clip Start.")
             for packet in stream.encode():
                 output.mux(packet)
         info = {
@@ -199,8 +199,6 @@ def encode_source(
         temporary.replace(destination)
         info_path.write_text(json.dumps(info) + "\n")
         return info
-    except (StopIteration, IndexError) as exc:
-        raise FourDAnyoneError("The original source clip is missing required frames.") from exc
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -241,20 +239,3 @@ class ClipTiming:
         last = self.duration - 1 / self.source_fps
         maximum = max(Fraction(0), last - Fraction(INFERENCE.num_frames - 1) / rate)
         return float(maximum * 100 // 1) / 100
-
-
-def probe_input(video: Path, start_time: float, target_fps="auto") -> None:
-    """Reject unreadable or short clips before queuing GPU work."""
-    rate = validate_clip_options(
-        start_time=start_time,
-        fps=None if str(target_fps).lower() == "auto" else target_fps,
-    )
-    timing = ClipTiming.read(video)
-    if timing is None:
-        raise ConfigurationError("Cannot read the source video's frame rate.")
-    needed = (INFERENCE.num_frames - 1) / float(rate or choose_canonical_fps(timing.source_fps))
-    if timing.duration is not None and float(timing.duration) - start_time <= needed:
-        raise ConfigurationError(
-            f"Need 121 frames after the selected start, about {needed:.2f} seconds. "
-            "Choose an earlier start or a longer video."
-        )

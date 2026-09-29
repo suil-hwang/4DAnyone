@@ -6,7 +6,6 @@ from pathlib import Path
 
 import numpy as np
 
-from fdanyone.errors import FourDAnyoneError
 from fdanyone.nerfstudio.cameras import camera_geometry, points_to_nerfstudio, visual_hull_center
 
 NERFSTUDIO_POINT_CLOUD = "sparse_pcd.ply"
@@ -17,7 +16,6 @@ NERFSTUDIO_POINT_CLOUD = "sparse_pcd.ply"
 VISUAL_HULL_HALF_EXTENT_METERS = 1.25
 VISUAL_HULL_VOXEL_SIZE_METERS = 0.02
 VISUAL_HULL_BATCH_SIZE = 250_000
-VISUAL_HULL_MIN_POINTS = 100
 
 
 def _point_colors(
@@ -57,8 +55,6 @@ def _point_colors(
         color_sum[point_ids] += images_tensor[camera_id, sample_v, sample_u].to(torch.float32)
         color_count[point_ids] += 1.0
 
-    if torch.any(color_count == 0):
-        raise FourDAnyoneError("Visual-hull points have no foreground color observations.")
     return torch.round(color_sum / color_count).clamp(0, 255).to(torch.uint8)
 
 
@@ -70,17 +66,7 @@ def build_sparse_point_cloud(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Carve a colored visual hull in the canonical 4DAnyone world."""
 
-    try:
-        import torch
-    except ImportError as exc:  # pragma: no cover - the inference environment always has torch.
-        raise FourDAnyoneError("PyTorch is required to carve the Nerfstudio visual hull.") from exc
-
-    if binary_masks.dtype != np.bool_:
-        raise FourDAnyoneError("Visual-hull masks must be boolean.")
-    if len(images) != len(cameras) or binary_masks.shape[0] != len(cameras):
-        raise FourDAnyoneError("Visual-hull images, masks, and cameras must have matching counts.")
-    if len({image.shape for image in images}) != 1:
-        raise FourDAnyoneError("Visual-hull images must share one raster size.")
+    import torch
 
     camera_to_worlds, projection_matrices = camera_geometry(cameras)
     center = visual_hull_center(camera_to_worlds)
@@ -126,14 +112,7 @@ def build_sparse_point_cloud(
             if torch.any(keep):
                 kept.append(points[keep])
 
-        if not kept:
-            raise FourDAnyoneError("Foreground masks and cameras produced an empty visual hull.")
         points_world = torch.cat(kept)
-        if points_world.shape[0] < VISUAL_HULL_MIN_POINTS:
-            raise FourDAnyoneError(
-                f"Foreground masks and cameras produced only {points_world.shape[0]} visual-hull points; "
-                f"expected at least {VISUAL_HULL_MIN_POINTS}."
-            )
         colors = _point_colors(points_world, images, masks, projections, torch)
 
     points_world = points_world.cpu().numpy().astype(np.float32, copy=False)
@@ -144,10 +123,6 @@ def build_sparse_point_cloud(
 def write_sparse_point_cloud(path: Path, points: np.ndarray, colors: np.ndarray) -> None:
     """Write colored XYZ vertices as a binary little-endian PLY."""
 
-    if points.dtype != np.float32 or points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
-        raise FourDAnyoneError("Sparse point-cloud positions must be finite float32 XYZ values.")
-    if colors.dtype != np.uint8 or colors.shape != points.shape:
-        raise FourDAnyoneError("Sparse point-cloud colors must be uint8 RGB values matching the positions.")
     vertices = np.empty(
         len(points),
         dtype=[

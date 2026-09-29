@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import math
 from pathlib import Path
 
 from fdanyone.errors import ConfigurationError
@@ -48,8 +47,6 @@ def make_options(video, views, pitches, start_yaw, yaw_span, turbo, start_time) 
     """Translate the editable Space form into the CLI's inference arguments."""
     from fdanyone.video import validate_clip_options
 
-    if not video or not Path(video).is_file():
-        raise ConfigurationError("The source video is unavailable. Check --video_path.")
     validate_clip_options(start_time=start_time, fps=None)
     return {
         "video_path": str(Path(video).resolve()),
@@ -62,7 +59,7 @@ def make_options(video, views, pitches, start_yaw, yaw_span, turbo, start_time) 
 def layout_options(views, pitches, start_yaw, yaw_span) -> dict:
     values = {"views_per_layer": views, "start_yaw": start_yaw, "yaw_span": yaw_span}
     for name, value in values.items():
-        if value is None or not math.isfinite(float(value)) or int(value) != float(value):
+        if int(value) != float(value):
             raise ConfigurationError(f"{name} must be an integer.")
     values = {name: int(value) for name, value in values.items()}
     values["layer_pitches"] = pitches

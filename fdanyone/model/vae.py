@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, TypeVar
 import numpy as np
 
 from fdanyone.config import INFERENCE
-from fdanyone.errors import FourDAnyoneError
 from fdanyone.video import write_video
 
 if TYPE_CHECKING:
@@ -39,7 +38,8 @@ def _rgb_frames(video: Tensor) -> tuple[np.ndarray, ...]:
 
     scaled = video.detach().float().add_(1.0).mul_(127.5).clamp_(0.0, 255.0).to(device="cpu")
     return tuple(
-        scaled[:, frame_index].permute(1, 2, 0).numpy().astype(np.uint8) for frame_index in range(scaled.shape[1])
+        scaled[:, frame_index].permute(1, 2, 0).numpy().astype(np.uint8, order="C")
+        for frame_index in range(scaled.shape[1])
     )
 
 
@@ -52,8 +52,6 @@ class VaeExecutor:
     """
 
     def __init__(self, model: WanVideoVAE38, devices: tuple[str, ...]) -> None:
-        if not devices:
-            raise FourDAnyoneError("VAE execution requires at least one CUDA device.")
         self.devices = devices
         self._models = [model]
         self.last_peak_vram_bytes: dict[str, dict[str, int]] = {}
@@ -78,8 +76,6 @@ class VaeExecutor:
 
     @staticmethod
     def _worker_count(num_views: int, num_devices: int) -> int:
-        if num_views <= 0:
-            raise FourDAnyoneError("VAE execution requires at least one view.")
         return min(num_views, num_devices)
 
     @staticmethod
@@ -171,8 +167,6 @@ class VaeExecutor:
 
         import torch
 
-        if videos.ndim != 5 or videos.device.type != "cpu":
-            raise FourDAnyoneError(f"VAE input must be CPU [V,C,F,H,W], got {tuple(videos.shape)} on {videos.device}.")
         outputs: list[Tensor | None] = [None] * videos.shape[0]
 
         def operation(model: WanVideoVAE38, device: str, indices: tuple[int, ...], stopped: Event) -> None:
@@ -185,8 +179,6 @@ class VaeExecutor:
                     del encoded
 
         self._run_workers(num_views=videos.shape[0], operation=operation)
-        if any(output is None for output in outputs):
-            raise RuntimeError("VAE encode completed without every canonical view.")
         return torch.stack(outputs)  # type: ignore[arg-type]
 
     def _decode_and_publish(
@@ -196,10 +188,6 @@ class VaeExecutor:
     ) -> tuple[Output, ...]:
         import torch
 
-        if latents.ndim != 5 or latents.device.type != "cpu":
-            raise FourDAnyoneError(
-                f"VAE latents must be CPU [V,C,F,H,W], got {tuple(latents.shape)} on {latents.device}."
-            )
         num_views = int(latents.shape[0])
         worker_count = self._worker_count(num_views, len(self.devices))
         slots = BoundedSemaphore(worker_count)
@@ -246,9 +234,7 @@ class VaeExecutor:
             for future in sink_futures:
                 if future is not None and future.done() and future.exception() is not None:
                     future.result()
-            if any(future is None for future in sink_futures):
-                raise RuntimeError("VAE decode completed without every canonical view.")
-            return tuple(future.result() for future in sink_futures if future is not None)
+            return tuple(future.result() for future in sink_futures)
 
     def publish_targets(self, latents: Tensor, output_dir: Path, fps: Fraction) -> tuple[Path, ...]:
         video_root = output_dir / "videos"

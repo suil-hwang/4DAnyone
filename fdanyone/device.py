@@ -106,42 +106,26 @@ def select_cuda_device(device: str) -> tuple[str, int]:
 
     import torch
 
-    try:
-        requested = torch.device(device)
-    except (RuntimeError, TypeError, ValueError) as exc:
-        raise ConfigurationError(f"Invalid CUDA device {device!r}.") from exc
-    if requested.type != "cuda" or not torch.cuda.is_available():
-        raise ConfigurationError(f"4DAnyone requires an available CUDA device, got {device!r}.")
-    index = torch.cuda.current_device() if requested.index is None else requested.index
-    if index < 0 or index >= torch.cuda.device_count():
-        raise ConfigurationError(
-            f"CUDA device index {index} is unavailable; visible device count is {torch.cuda.device_count()}."
-        )
-    torch.cuda.set_device(index)
+    requested = torch.device(device)
+    if requested.type == "cuda" and requested.index is None:
+        requested = torch.device("cuda", torch.cuda.current_device())
+    torch.cuda.set_device(requested)
+    index = torch.cuda.current_device()
     return f"cuda:{index}", index
 
 
 def validate_gpu_ids(gpu_ids: Sequence[int] | None, available: int) -> tuple[int, ...]:
     """Validate logical indices without initializing CUDA or selecting a device."""
-    if available <= 0:
-        raise ConfigurationError("4DAnyone requires at least one available CUDA device.")
-    if gpu_ids is None:
-        selected = tuple(range(available))
-    else:
-        if isinstance(gpu_ids, (str, bytes)) or not isinstance(gpu_ids, Sequence) or not gpu_ids:
-            raise ConfigurationError("gpu_ids must be a non-empty list of CUDA-visible device IDs.")
-        selected = tuple(gpu_ids)
-        invalid = [gpu_id for gpu_id in selected if isinstance(gpu_id, bool) or not isinstance(gpu_id, int)]
-        if invalid:
-            raise ConfigurationError(f"gpu_ids must contain only integers, got {invalid!r}.")
-        if len(set(selected)) != len(selected):
-            raise ConfigurationError(f"gpu_ids must not contain duplicates, got {list(selected)!r}.")
-
-    unavailable = [gpu_id for gpu_id in selected if gpu_id < 0 or gpu_id >= available]
-    if unavailable:
-        raise ConfigurationError(
-            f"gpu_ids contains unavailable CUDA-visible device IDs {unavailable}; visible device count is {available}."
-        )
+    selected = tuple(range(available) if gpu_ids is None else gpu_ids)
+    if not selected:
+        raise ConfigurationError("Select at least one available CUDA device.")
+    if any(
+        isinstance(gpu_id, bool) or not isinstance(gpu_id, int) or not 0 <= gpu_id < available
+        for gpu_id in selected
+    ):
+        raise ConfigurationError(f"Invalid gpu_ids: {selected}; available IDs: 0..{available - 1}.")
+    if len(set(selected)) != len(selected):
+        raise ConfigurationError(f"Duplicate gpu_ids: {selected}.")
     return selected
 
 

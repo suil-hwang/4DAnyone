@@ -26,14 +26,8 @@ def denoising_camera_order(view_plan: ViewPlan) -> CameraOrder:
 
     views_per_layer = view_plan.views_per_layer
     num_layers = view_plan.num_layers
-    if views_per_layer <= 0 or num_layers <= 0:
-        raise ValueError("A denoising camera order requires a non-empty resolved view plan.")
-    if len(set(view_plan.layer_pitches)) != num_layers:
-        raise ValueError("A denoising camera order requires distinct pitch layers.")
     if num_layers == 1:
         return tuple(range(views_per_layer))
-    if views_per_layer > 1 and views_per_layer % 2 and num_layers % 2:
-        raise ValueError("A multi-layer camera grid requires an even number of cameras.")
 
     # Public IDs follow input layer order. Physical vertical neighbors follow
     # pitch order, so this mapping changes traversal without changing identity.
@@ -69,8 +63,6 @@ def cyclic_groups(
 
     order = tuple(camera_order)
     num_views = len(order)
-    if num_views <= 0 or group_size <= 0 or num_views % group_size:
-        raise ValueError(f"{num_views} cameras must be divisible by positive group_size={group_size}.")
     return tuple(
         tuple(order[(group_start + offset + local_index) % num_views] for local_index in range(group_size))
         for group_start in range(0, num_views, group_size)
@@ -86,10 +78,6 @@ def routing_steps(
 ) -> Routes:
     """Return fixed or TCR-shifted partitions of one global camera ring."""
 
-    if num_steps <= 0:
-        raise ValueError(f"num_steps must be positive, got {num_steps}.")
-    if tcr_stride <= 0:
-        raise ValueError(f"tcr_stride must be positive, got {tcr_stride}.")
     camera_order = denoising_camera_order(view_plan)
 
     def step_offset(step_index: int) -> int:
@@ -108,28 +96,3 @@ def routing_steps(
         )
         for step_index in range(num_steps)
     )
-
-
-def validate_routes(routes: Routes, num_views: int) -> None:
-    """Require every routing step to be an equal partition of canonical IDs."""
-
-    if num_views <= 0:
-        raise ValueError(f"Target denoising requires a positive camera count, got {num_views}.")
-    if not routes:
-        raise ValueError("Target denoising requires at least one routing step.")
-    if not routes[0] or not routes[0][0]:
-        raise ValueError("Target denoising requires non-empty camera groups.")
-
-    num_groups = len(routes[0])
-    group_size = len(routes[0][0])
-    expected_ids = list(range(num_views))
-    for step_index, groups in enumerate(routes):
-        if len(groups) != num_groups:
-            raise ValueError(f"Routing step {step_index} has {len(groups)} groups; every step must have {num_groups}.")
-        if any(len(group) != group_size for group in groups):
-            raise ValueError(f"Routing step {step_index} contains camera groups with inconsistent sizes.")
-        camera_ids = sorted(camera_id for group in groups for camera_id in group)
-        if camera_ids != expected_ids:
-            raise ValueError(
-                f"Routing step {step_index} is not a disjoint partition of cameras 0..{num_views - 1}: {groups}."
-            )

@@ -23,8 +23,7 @@ from fdanyone.run_request import REQUEST_FILE, read_run_request, save_run_reques
 from fdanyone.space.monitor import RunMonitor
 from fdanyone.space.previews import PreviewLoader
 from fdanyone.space.settings import complete_options
-from fdanyone.space.source import probe_input
-from fdanyone.space.task import SavedTask, SpaceConfig, ensure_new_output, read_task, saved_request, source_matches
+from fdanyone.space.task import SavedTask, SpaceConfig, ensure_new_output, read_task, source_matches
 
 FINISHED = {"complete", "failed", "cancelled"}
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -164,10 +163,7 @@ def stop_process_group(process: subprocess.Popen, grace_seconds: float = 3.0) ->
     """Stop an owned worker and descendants, including after its parent exits."""
 
     if os.name == "nt":
-        job = getattr(process, "_fdanyone_job", None)
-        if job is None:
-            raise FourDAnyoneError("Windows workers must be started with worker_process to own their subprocesses.")
-        job.close()
+        process._fdanyone_job.close()
         process.wait()
         return
     if os.name != "posix":
@@ -218,7 +214,7 @@ class JobManager:
 
     def __init__(self, config: SpaceConfig):
         if config.video_path is None:
-            source = Path(saved_request(config.output_dir)["options"]["video_path"])
+            source = Path(read_run_request(config.output_dir)["options"]["video_path"])
             config = replace(config, video_path=source)
         self.config = config
         self.revision = 0
@@ -251,16 +247,16 @@ class JobManager:
         """Delete only the confirmed, inactive task while holding the CLI's lock."""
         with self.lock:
             if self.closed or self.job and self.job.state not in FINISHED:
-                raise ConfigurationError("Wait for inference to stop before deleting its output.")
+                raise ConfigurationError("Stop inference before deleting output.")
             output = resolve_output_path(self.config.output_dir)
             if output != self.config.output_dir or output.is_symlink() or not output.is_dir():
-                raise ConfigurationError("The output directory changed. Reload the Space before deleting it.")
+                raise ConfigurationError("Output directory changed; reload before deletion.")
             with lock_output(output):
                 if expected != self.deletion_key():
-                    raise ConfigurationError("The task changed. Review its current state before deleting output.")
+                    raise ConfigurationError("Task changed; confirm deletion again.")
                 record = self.record()
                 if record is None or record.complete:
-                    raise ConfigurationError("Only unfinished task output can be deleted in the Space.")
+                    raise ConfigurationError("Only unfinished output can be deleted.")
                 protected = [
                     REPOSITORY,
                     self.config.video_path,
@@ -274,7 +270,7 @@ class JobManager:
                     ),
                 ]
                 if any(path.resolve().is_relative_to(output) for path in protected):
-                    raise ConfigurationError("Cannot delete an output folder containing source, models, code or cache.")
+                    raise ConfigurationError("Output contains protected source, models, code or cache.")
                 self.previews.discard_all(wait=True)
                 remove_tree(output)
                 self.job = None
@@ -283,15 +279,11 @@ class JobManager:
     def resume(self) -> Job:
         with self.lock:
             record = self.record()
-            if record and record.complete:
-                raise ConfigurationError("This result is complete.")
             if not record or not record.resumable:
-                raise ConfigurationError("Cannot resume: the saved settings or original source video are unavailable.")
+                raise ConfigurationError("Cannot resume without valid settings and original source.")
             return self.submit(record.options, resume=True)
 
     def submit(self, options: dict, *, resume: bool = False) -> Job:
-        from fdanyone.assets import SMPLX_MODEL
-
         options = complete_options(
             {
                 "model_dir": str(self.config.model_dir),
@@ -303,19 +295,13 @@ class JobManager:
         )
         model_dir = Path(options["model_dir"]).expanduser().resolve()
         gvhmr_root = Path(options["gvhmr_root"]).expanduser().resolve()
-        if not (model_dir / SMPLX_MODEL).is_file():
-            raise ConfigurationError(
-                "SMPL-X is not installed. Run python scripts/download_smplx.py "
-                "in the terminal with the same model directory, then try again."
-            )
         source = Path(options["video_path"]).resolve()
-        probe_input(source, options["start_time"], options["target_fps"])
         with self.lock:
             if self.closed:
-                raise ConfigurationError("The Space is shutting down.")
+                raise ConfigurationError("Space is shutting down.")
             current = self.current_job()
             if current and current.state not in FINISHED:
-                raise ConfigurationError("This task already has an active inference run.")
+                raise ConfigurationError("Inference is already running.")
             output_dir = resolve_output_path(self.config.output_dir)
             output_dir.parent.mkdir(parents=True, exist_ok=True)
             with lock_output(output_dir):
@@ -325,7 +311,7 @@ class JobManager:
                     OutputDirectory(output_dir).validate_available()
                 previous = read_run_request(output_dir)
                 if previous and not source_matches(source, previous["source"], self.config.cache_dir):
-                    raise ConfigurationError("The source video differs from the saved request.")
+                    raise ConfigurationError("Source differs from the saved request.")
                 token = uuid.uuid4().hex
                 directory = self.config.cache_dir / "jobs" / token
                 directory.mkdir(parents=True)
@@ -351,7 +337,7 @@ class JobManager:
     def get(self, token: str) -> Job:
         with self.lock:
             if self.job is None or self.job.token != token:
-                raise ConfigurationError("This run is no longer available. Start a new run.")
+                raise ConfigurationError("Run is no longer available.")
             return self.job
 
     def cancel(self, token: str | None) -> str:
@@ -475,9 +461,7 @@ class JobManager:
                 if status.get("error") and status.get("message"):
                     message = status["message"]
                 else:
-                    message = f"Inference exited with code {process.returncode}. See the run log."
-                    if status.get("message"):
-                        message += f" Last stage: {status['message']}."
+                    message = f"Inference exited with code {process.returncode}: {job.directory / 'inference.log'}"
                 raise FourDAnyoneError(message)
             from fdanyone.space.viewer import read_result
 

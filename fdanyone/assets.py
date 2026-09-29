@@ -33,7 +33,6 @@ PROMPT_CONTEXT = "4danyone/prompt_context.safetensors"
 
 TURBO_LORA = "4danyone/Wan22_TI2V_5B_Turbo_lora_rank_64_fp16.safetensors"
 TURBO_LORA_NAME = "wan22_ti2v_5b_turbo_lora"
-TURBO_LORA_SIZE_BYTES = 332_348_584
 TURBO_LORA_SHA256 = "0ace5244e3d1256f884662c261b017249796cf5b95f05d5ed93cc02a478967b8"
 
 GVHMR_CHECKPOINT = "gvhmr/gvhmr_siga24_release.ckpt"
@@ -97,59 +96,32 @@ class BaseAssets:
     prompt_context: Path
 
 
-def _require_file(path: Path, label: str, command: str) -> Path:
-    resolved = path.expanduser().resolve()
-    if not resolved.is_file():
-        raise AssetError(f"{label} does not exist: {resolved}. Run `python {command}` to install it.")
-    return resolved
-
-
 def resolve_checkpoint(path: str | Path | None = None, model_dir: str | Path = "models") -> Path:
-    if path is not None:
-        resolved = Path(path).expanduser().resolve()
-        if not resolved.is_file():
-            raise AssetError(f"Checkpoint override does not exist: {resolved}")
-        return resolved
-    return _require_file(Path(model_dir) / CHECKPOINT, "Checkpoint", "scripts/download_model.py")
+    return (Path(path) if path is not None else Path(model_dir) / CHECKPOINT).expanduser().resolve()
 
 
 def resolve_turbo_lora(model_dir: str | Path = "models") -> Path:
     """Resolve and authenticate the exact Wan2.2 5B Turbo LoRA."""
 
-    resolved = _require_file(Path(model_dir) / TURBO_LORA, "Turbo LoRA", "scripts/download_model.py")
-    size = resolved.stat().st_size
-    if size != TURBO_LORA_SIZE_BYTES:
-        raise AssetError(f"Turbo LoRA size mismatch: {size} != {TURBO_LORA_SIZE_BYTES} bytes ({resolved})")
+    resolved = (Path(model_dir) / TURBO_LORA).expanduser().resolve()
     digest = sha256_file(resolved)
     if digest != TURBO_LORA_SHA256:
-        raise AssetError(f"Turbo LoRA SHA-256 mismatch: {digest} != {TURBO_LORA_SHA256} ({resolved})")
+        raise AssetError(f"Turbo LoRA SHA-256 mismatch: {resolved}")
     return resolved
 
 
 def resolve_regressor(path: str | Path | None = None, model_dir: str | Path = "models") -> Path:
-    if path is not None:
-        resolved = Path(path).expanduser().resolve()
-        if not resolved.is_file():
-            raise AssetError(f"MHR70 regressor override does not exist: {resolved}")
-        return resolved
-    return _require_file(Path(model_dir) / MHR70_REGRESSOR, "MHR70 regressor", "scripts/download_model.py")
+    return (Path(path) if path is not None else Path(model_dir) / MHR70_REGRESSOR).expanduser().resolve()
 
 
 def resolve_foreground_model(model_dir: str | Path = "models") -> Path:
-    root = Path(model_dir).expanduser() / BIREFNET_DIR
-    for relative in BIREFNET_FILES:
-        _require_file(root / relative, "BiRefNet file", "scripts/download_model.py")
-    return root.resolve()
+    return (Path(model_dir) / BIREFNET_DIR).expanduser().resolve()
 
 
 def resolve_perceptual_vgg19(model_dir: str | Path = "models") -> Path:
     """Resolve the converted VGG-19 weights used by perceptual reconstruction."""
 
-    return _require_file(
-        Path(model_dir) / PERCEPTUAL_VGG19,
-        "Perceptual VGG-19 weights",
-        "scripts/download_model.py",
-    )
+    return (Path(model_dir) / PERCEPTUAL_VGG19).expanduser().resolve()
 
 
 def resolve_base_assets(model_dir: str | Path = "models") -> BaseAssets:
@@ -157,6 +129,6 @@ def resolve_base_assets(model_dir: str | Path = "models") -> BaseAssets:
 
     root = Path(model_dir).expanduser()
     return BaseAssets(
-        vae=_require_file(root / WAN_VAE, "VAE", "scripts/download_model.py"),
-        prompt_context=_require_file(root / PROMPT_CONTEXT, "Prompt conditioning", "scripts/download_model.py"),
+        vae=(root / WAN_VAE).resolve(),
+        prompt_context=(root / PROMPT_CONTEXT).resolve(),
     )

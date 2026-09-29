@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING, TypedDict
 
 from fdanyone.assets import BaseAssets
 from fdanyone.config import INFERENCE, DenoisingProfile
-from fdanyone.errors import FourDAnyoneError
 from fdanyone.model.conditioning import (
     PoseFeatureBank,
     build_pose_feature_cache,
@@ -32,7 +31,7 @@ from fdanyone.model.distributed import (
 )
 from fdanyone.model.loader import Denoiser, load_denoiser
 from fdanyone.model.metrics import GenerationMetrics
-from fdanyone.model.routing import Routes, routing_steps, validate_routes
+from fdanyone.model.routing import Routes, routing_steps
 from fdanyone.model.vae import VaeExecutor
 from fdanyone.skeleton.pipeline import Conditioning
 from fdanyone.views import ViewPlan
@@ -112,8 +111,6 @@ def _channels_last_source_layout(video):
 
     import torch
 
-    if video.ndim != 5:
-        raise FourDAnyoneError(f"Expected a 5D video tensor, got shape {tuple(video.shape)}.")
     return video.contiguous(memory_format=torch.channels_last_3d)
 
 
@@ -154,8 +151,6 @@ def _denoise_rcp(
     import torch
     from tqdm.auto import tqdm
 
-    if pose_features.num_features != len(camera_ids):
-        raise FourDAnyoneError(f"RCP requires {len(camera_ids)} pose features, got {pose_features.num_features}.")
     latents = _noise(
         vae=vae,
         num_views=len(camera_ids),
@@ -202,19 +197,6 @@ def _denoise_targets_single(
     from tqdm.auto import tqdm
 
     num_views = initial_latents.shape[0]
-    if initial_latents.device.type != "cpu":
-        raise FourDAnyoneError("Canonical target latents must remain on the CPU between denoising groups.")
-    if pose_features.num_features != num_views:
-        raise FourDAnyoneError(
-            f"Target generation requires {num_views} pose features, got {pose_features.num_features}."
-        )
-    validate_routes(routes, num_views)
-    num_timesteps = len(denoiser.scheduler.timesteps)
-    if len(routes) != num_timesteps:
-        raise FourDAnyoneError(
-            f"Denoising requires one route per scheduler timestep; got "
-            f"{len(routes)} routes for {num_timesteps} timesteps."
-        )
     latents = initial_latents
     source = src_latents.to(dtype=denoiser.dtype, device=device)
     context = context.to(dtype=denoiser.dtype, device=device)
@@ -249,17 +231,7 @@ def _resolve_generation_plan(
 ) -> _GenerationPlan:
     import torch
 
-    if conditioning.num_frames != INFERENCE.num_frames:
-        raise FourDAnyoneError("Generation requires the frozen 121-frame contract.")
-    if not devices:
-        raise FourDAnyoneError("Generation requires at least one CUDA device.")
-
     view_plan = conditioning.view_plan
-    if len(conditioning.target_skeletons) != view_plan.num_target_views:
-        raise FourDAnyoneError("Target skeleton count does not match the resolved view plan.")
-    if len(conditioning.rcp_skeletons) != len(view_plan.rcp_camera_ids):
-        raise FourDAnyoneError("RCP skeleton count does not match the resolved view plan.")
-
     primary_device = devices[0]
     primary_device_index = int(primary_device.removeprefix("cuda:"))
     dit_devices = select_worker_devices(devices, view_plan.num_groups)
@@ -356,8 +328,6 @@ def generate_views(
 
     import torch
 
-    if seed < 0:
-        raise FourDAnyoneError(f"seed must be non-negative, got {seed}.")
     plan = _resolve_generation_plan(
         conditioning=conditioning,
         devices=devices,
@@ -403,8 +373,6 @@ def generate_views(
 
         target_sources = source_latents
         if plan.view_plan.enable_rcp:
-            if denoiser is None or rcp_pose_features is None:
-                raise RuntimeError("RCP requires a primary denoiser and proposal pose features.")
             with metrics.stage("rcp_denoise"):
                 denoiser.prepare_on_device(plan.primary_device)
                 _empty_cuda_cache()
@@ -457,8 +425,6 @@ def generate_views(
                     root=root,
                 )
             else:
-                if denoiser is None:
-                    raise RuntimeError("Single-GPU target generation requires a primary-process denoiser.")
                 if not plan.view_plan.enable_rcp:
                     denoiser.prepare_on_device(plan.primary_device)
                     _empty_cuda_cache()

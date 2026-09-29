@@ -72,14 +72,11 @@ def load_body(motion_dir: Path, model_dir: Path, gvhmr_root: Path, cache_dir: Pa
         model_dir / SMPLX_MODEL,
         model_dir / MHR70_REGRESSOR,
     ]
-    for path in files:
-        if not path.is_file():
-            raise FourDAnyoneError(f"Body preview needs {path.name}. Check the model and motion files.")
     metadata = json.loads((motion_dir / "motion.json").read_text())
     if metadata.get("tensor_file") != "motion.safetensors" or any(
         not path.resolve().is_relative_to(motion_dir.resolve()) for path in files[:2]
     ):
-        raise FourDAnyoneError("The result must contain its own motion.json and motion.safetensors files.")
+        raise FourDAnyoneError("Motion cache requires local motion.json and motion.safetensors.")
     identity = [(str(path.resolve()), path.stat().st_size, path.stat().st_mtime_ns) for path in files]
     key = hashlib.sha256(json.dumps([1, identity]).encode()).hexdigest()[:24]
     directory = cache_dir / "body" / key
@@ -115,7 +112,7 @@ def load_body(motion_dir: Path, model_dir: Path, gvhmr_root: Path, cache_dir: Pa
                     check_cancelled()
                     time.sleep(0.1)
                 if process.returncode:
-                    raise FourDAnyoneError(f"Body preview preparation failed. See {directory / 'body.log'}.")
+                    raise FourDAnyoneError(f"Body preview failed: {directory / 'body.log'}")
     with np.load(destination, allow_pickle=False) as data:
         return {name: data[name] for name in data.files}
 

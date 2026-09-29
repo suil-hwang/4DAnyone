@@ -31,6 +31,4 @@ def main(request_path: str) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("Usage: python -m fdanyone.skeleton.worker REQUEST.json")
     main(sys.argv[1])

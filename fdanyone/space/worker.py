@@ -40,7 +40,8 @@ def main(request_path: str) -> int:
         summary = inference(**options)
         write_status(status, "Inference complete", 1.0, summary=summary)
     except Exception as exc:
-        write_status(status, str(exc) or type(exc).__name__, 0.0, error=True)
+        message = (str(exc).strip() or type(exc).__name__).splitlines()[0]
+        write_status(status, message, 0.0, error=True)
         traceback.print_exc()
         return 1
     finally:

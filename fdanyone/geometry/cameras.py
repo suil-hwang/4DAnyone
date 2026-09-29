@@ -1,5 +1,4 @@
-"""Camera conventions, calibration, projection, and uniform camera sampling."""
-
+# fdanyone/geometry/cameras.py
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
@@ -72,47 +71,22 @@ def reference_intrinsics(
     return intrinsic
 
 
-def look_at_pytorch3d(position: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Return column-vector world-to-camera (R, t) with PyTorch3D camera axes."""
+def look_at_opencv(position: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return column-vector world-to-camera (R, t) with OpenCV axes for positions [..., 3]."""
 
     position = np.asarray(position, dtype=np.float64)
-    target = np.asarray(target, dtype=np.float64)
-    up = np.array([0.0, 1.0, 0.0], dtype=np.float64)
-    z_axis = target - position
-    z_axis /= np.linalg.norm(z_axis)
-    x_axis = np.cross(up, z_axis)
-    x_axis /= np.linalg.norm(x_axis)
-    y_axis = np.cross(z_axis, x_axis)
-    y_axis /= np.linalg.norm(y_axis)
-    rotation = np.stack([x_axis, y_axis, z_axis], axis=0)
-    translation = -(rotation @ position)
-    return rotation, translation
-
-
-def pytorch3d_to_opencv(rotation: np.ndarray, translation: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Convert camera axes to OpenCV by flipping camera x and y."""
-
-    rotation_cv = np.asarray(rotation, dtype=np.float64).copy()
-    translation_cv = np.asarray(translation, dtype=np.float64).copy()
-    rotation_cv[:2] *= -1.0
-    translation_cv[:2] *= -1.0
-    return rotation_cv, translation_cv
-
-
-def homogeneous_w2c(rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
-    """Assemble the column-vector world-to-camera transform [R | t]."""
-
-    matrix = np.eye(4, dtype=np.float64)
-    matrix[:3, :3] = rotation
-    matrix[:3, 3] = translation
-    return matrix
+    forward = np.asarray(target, dtype=np.float64) - position
+    forward /= np.linalg.norm(forward, axis=-1, keepdims=True)
+    right = np.cross(forward, (0.0, 1.0, 0.0))
+    right /= np.linalg.norm(right, axis=-1, keepdims=True)
+    down = np.cross(forward, right)
+    down /= np.linalg.norm(down, axis=-1, keepdims=True)
+    rotation = np.stack([right, down, forward], axis=-2)
+    return rotation, -(rotation @ position[..., None])[..., 0]
 
 
 def project_points(points_world: np.ndarray, camera: Camera) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Return pixels, signed camera depths, and a positive-depth, in-frame mask.
-
-    Near/behind-camera points use the renderer's stabilized 1e-8 depth floor.
-    """
+    """Return pixels, signed camera depths, and a positive-depth, in-frame mask."""
 
     points = np.asarray(points_world, dtype=np.float64)
     w2c = np.asarray(camera.world_to_camera)
@@ -156,43 +130,33 @@ def camera_ring(
     azimuth_start = front_azimuth + np.pi + np.deg2rad(start_yaw_degrees)
     target = center.copy()
     target[1] = target_height
-    camera_height = target_height + radius * np.tan(np.deg2rad(spec.pitch_degrees))
-    intrinsic = tuple(tuple(float(value) for value in row) for row in K)
+    intrinsic = tuple(map(tuple, np.asarray(K, dtype=np.float64).tolist()))
 
-    cameras: list[Camera] = []
-    yaw_span_radians = np.deg2rad(yaw_span_degrees)
-    for view_index in range(spec.count):
-        camera_id = camera_id_offset + view_index
-        yaw_degrees = start_yaw_degrees + view_index / spec.count * yaw_span_degrees
-        azimuth = azimuth_start + view_index / spec.count * yaw_span_radians
-        position = np.array(
-            [
-                center[0] + radius * np.cos(azimuth),
-                camera_height,
-                center[2] + radius * np.sin(azimuth),
-            ],
-            dtype=np.float64,
+    fractions = np.arange(spec.count) / spec.count
+    azimuths = azimuth_start + fractions * np.deg2rad(yaw_span_degrees)
+    # Cameras sit `radius` out horizontally from the target and `radius * tan(pitch)` above it.
+    slope = np.tan(np.deg2rad(spec.pitch_degrees))
+    positions = target + radius * np.column_stack([np.cos(azimuths), np.full(spec.count, slope), np.sin(azimuths)])
+    w2c = np.zeros((spec.count, 4, 4))
+    w2c[:, :3, :3], w2c[:, :3, 3] = look_at_opencv(positions, target)
+    w2c[:, 3, 3] = 1.0
+    c2w = np.linalg.inv(w2c)
+    return tuple(
+        Camera(
+            camera_id=camera_id_offset + view_index,
+            layer_index=layer_index,
+            yaw_degrees=float(start_yaw_degrees + fractions[view_index] * yaw_span_degrees),
+            azimuth_degrees=float(np.rad2deg(azimuths[view_index]) % 360.0),
+            pitch_degrees=spec.pitch_degrees,
+            position=tuple(positions[view_index].tolist()),
+            K=intrinsic,
+            world_to_camera=tuple(map(tuple, w2c[view_index].tolist())),
+            camera_to_world=tuple(map(tuple, c2w[view_index].tolist())),
+            image_width=image_width,
+            image_height=image_height,
         )
-        rotation_p3d, translation_p3d = look_at_pytorch3d(position, target)
-        rotation_cv, translation_cv = pytorch3d_to_opencv(rotation_p3d, translation_p3d)
-        w2c = homogeneous_w2c(rotation_cv, translation_cv)
-        c2w = np.linalg.inv(w2c)
-        cameras.append(
-            Camera(
-                camera_id=camera_id,
-                layer_index=layer_index,
-                yaw_degrees=float(yaw_degrees),
-                azimuth_degrees=float(np.rad2deg(azimuth) % 360.0),
-                pitch_degrees=spec.pitch_degrees,
-                position=tuple(float(value) for value in position),
-                K=intrinsic,
-                world_to_camera=tuple(tuple(float(value) for value in row) for row in w2c),
-                camera_to_world=tuple(tuple(float(value) for value in row) for row in c2w),
-                image_width=image_width,
-                image_height=image_height,
-            )
-        )
-    return tuple(cameras)
+        for view_index in range(spec.count)
+    )
 
 
 def camera_grid(
