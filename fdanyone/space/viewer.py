@@ -21,13 +21,13 @@ from fdanyone.errors import FourDAnyoneError
 from fdanyone.geometry.cameras import camera_grid, reference_intrinsics
 from fdanyone.output import read_output_metadata, read_target_videos
 from fdanyone.space import scene
-from fdanyone.space.body import body_cache_identity, load_body
+from fdanyone.space.body import body_cache_identity, file_identity, load_body
 from fdanyone.space.overlay import export_overlay
 from fdanyone.space.source import prepare_source
 from fdanyone.video import validate_clip_options
 
 _EXPORT_LOCK = threading.Lock()
-RECORDING_VERSION = 17
+RECORDING_VERSION = 19
 
 
 @dataclass(frozen=True)
@@ -120,13 +120,6 @@ def _prepare_targets(result: Result, media: Path, check_cancelled: Callable) -> 
 
 def scene_info(recording: Path) -> dict:
     return json.loads(recording.with_suffix(".json").read_text())
-
-
-def _identity(path: Path | None):
-    if path is None or not path.is_file():
-        return None
-    stat = path.stat()
-    return str(path.resolve()), stat.st_size, stat.st_mtime_ns
 
 
 def _cache_key(identity) -> str:
@@ -243,8 +236,8 @@ def export_recording(
         str(result.directory),
         result.metadata,
         result.cameras,
-        [_identity(p) for p in result.videos],
-        _identity(source),
+        [file_identity(p) for p in result.videos],
+        file_identity(source),
         body_identity,
     ]
     key = _cache_key(identity)
@@ -327,7 +320,7 @@ def export_input(
     rate = validate_clip_options(start_time=start_time, fps=None if str(target_fps).lower() == "auto" else target_fps)
     body_identity = _body_identity(motion_dir, model_dir, gvhmr_root, regressor_path)
     key = _cache_key(
-        [RECORDING_VERSION, "input", _identity(source), float(start_time), str(rate), layout, body_identity]
+        [RECORDING_VERSION, "input", file_identity(source), float(start_time), str(rate), layout, body_identity]
     )
     destination = cache_dir / f"input-{key}.rrd"
 

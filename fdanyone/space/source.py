@@ -13,7 +13,7 @@ import av
 
 from fdanyone.config import INFERENCE
 from fdanyone.errors import FourDAnyoneError
-from fdanyone.video import decode_frames, stream_rate, choose_canonical_fps, validate_clip_options
+from fdanyone.video import choose_canonical_fps, decode_frames, stream_rate
 
 
 def _remux_source(source, destination, *, fps, indices, start_time, check_cancelled):
@@ -81,7 +81,7 @@ def prepare_source(
             fps = choose_canonical_fps(stream_rate(container.streams.video[0]))
     fps = Fraction(fps)
     stat = source.stat()
-    identity = [1, str(source), stat.st_size, stat.st_mtime_ns, float(start_time), str(fps)]
+    identity = [2, str(source), stat.st_size, stat.st_mtime_ns, float(start_time), str(fps)]
     key = hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:24]
     destination = cache_dir / "sources" / key / "source.mp4"
     if indices is not None:
@@ -131,7 +131,7 @@ def encode_source(
             av.open(str(temporary), "w", options={"movflags": "+faststart"}) as output,
         ):
             video = container.streams.video[0]
-            fps = fps or choose_canonical_fps(stream_rate(video))
+            fps = Fraction(fps or choose_canonical_fps(stream_rate(video)))
             frames = iter(decode_frames(container, video))
             previous = next(frames)
             height, width = previous.rgb.shape[:2]
@@ -170,23 +170,21 @@ def encode_source(
                     else:
                         raise FourDAnyoneError("Source and motion timelines differ.")
             else:
-                origin = float(previous.timestamp) + start_time
+                # Match decode_canonical_clip exactly: the nearest frame, the earlier one on ties,
+                # and the last frame while within 3/4 of the slower clock's period.
+                start = previous.timestamp + Fraction(str(start_time))
+                max_error = Fraction(3, 4) / min(stream_rate(video), fps)
                 current = previous
                 for current in frames:
                     check_cancelled()
-                    while count < INFERENCE.num_frames and origin + count / float(fps) <= float(current.timestamp):
-                        target = origin + count / float(fps)
-                        write(
-                            previous
-                            if abs(float(previous.timestamp) - target) <= abs(float(current.timestamp) - target)
-                            else current
-                        )
+                    while count < INFERENCE.num_frames and start + count / fps <= current.timestamp:
+                        target = start + count / fps
+                        nearest = abs(previous.timestamp - target) <= abs(current.timestamp - target)
+                        write(previous if nearest else current)
                     if count == INFERENCE.num_frames:
                         break
                     previous = current
-                if count < INFERENCE.num_frames and abs(
-                    float(current.timestamp) - (origin + count / float(fps))
-                ) <= 0.75 / float(fps):
+                while count < INFERENCE.num_frames and abs(current.timestamp - (start + count / fps)) <= max_error:
                     write(current)
             if not count:
                 raise FourDAnyoneError("No source frames after Clip Start.")
@@ -219,22 +217,21 @@ class ClipTiming:
         try:
             with av.open(str(path)) as container:
                 stream = container.streams.video[0]
-                rate = stream.average_rate or stream.guessed_rate or stream.base_rate
-                if rate is None or rate <= 0:
+                rate = stream_rate(stream)
+                if rate <= 0:
                     return None
                 duration = stream.duration * stream.time_base if stream.duration is not None else None
                 if duration is None and stream.frames:
                     duration = Fraction(stream.frames) / rate
                 if duration is None and container.duration is not None:
                     duration = Fraction(container.duration, av.time_base)
-                return cls(Fraction(rate), Fraction(duration) if duration is not None else None)
-        except (OSError, ValueError, IndexError):
+                return cls(rate, Fraction(duration) if duration is not None else None)
+        except (OSError, ValueError, IndexError, TypeError):
             return None
 
-    def start_max(self, target_fps) -> float:
-        rate = validate_clip_options(
-            start_time=0, fps=None if str(target_fps).strip().lower() == "auto" else target_fps
-        ) or choose_canonical_fps(self.source_fps)
+    def start_max(self) -> float:
+        """The Space always submits target_fps="auto"."""
+        rate = choose_canonical_fps(self.source_fps)
         if self.duration is None:
             return 0.0
         # The last frame's timestamp precedes the container's end by one source

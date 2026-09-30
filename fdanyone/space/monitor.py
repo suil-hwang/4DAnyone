@@ -18,9 +18,9 @@ DISTRIBUTED_STEP = re.compile(r"Completed target denoising step (\d+)/(\d+)")
 class ConsoleTail:
     """Read appended bytes, retaining terminal carriage-return behavior."""
 
-    def __init__(self):
-        self.offset = 0
-        self.identity = None
+    def __init__(self, identity=None, offset=0):
+        self.identity = identity
+        self.offset = offset
         self.lines = deque(maxlen=MAX_LOG_LINES)
         self.line = ""
         self.escape = ""
@@ -31,22 +31,13 @@ class ConsoleTail:
         try:
             stat = path.stat()
             identity = (stat.st_dev, stat.st_ino)
-            if self.identity != identity or stat.st_size < self.offset:
-                self.__init__()
-                self.identity = identity
+            # A new or truncated log restarts; a browser joining a long run needs the latest output.
+            if self.identity != identity or not self.offset <= stat.st_size <= self.offset + MAX_READ_BYTES:
+                self.__init__(identity, max(0, stat.st_size - MAX_READ_BYTES))
             if stat.st_size == self.offset:
                 return self.text
             with path.open("rb") as stream:
-                if stat.st_size - self.offset > MAX_READ_BYTES:
-                    # A browser joining a long run needs the latest output.
-                    self.offset = max(0, stat.st_size - MAX_READ_BYTES)
-                    self.lines.clear()
-                    self.line = self.escape = ""
-                    self.carriage_return = False
-                    self.decoder.reset()
-                    stream.seek(self.offset)
-                else:
-                    stream.seek(self.offset)
+                stream.seek(self.offset)
                 chunk = stream.read(MAX_READ_BYTES)
                 self.offset = stream.tell()
         except FileNotFoundError:
@@ -54,7 +45,7 @@ class ConsoleTail:
         text = self.escape + self.decoder.decode(chunk)
         self.escape = ""
         last_escape = text.rfind("\x1b")
-        if last_escape >= 0 and not ANSI.fullmatch(text[last_escape:]) and not ANSI.match(text[last_escape:]):
+        if last_escape >= 0 and not ANSI.match(text[last_escape:]):
             self.escape, text = text[last_escape:][-256:], text[:last_escape]
         for fragment in re.split(r"([\r\n\b])", ANSI.sub("", text)):
             if fragment in {"\r", "\n"}:

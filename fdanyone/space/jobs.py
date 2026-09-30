@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import concurrent.futures
 import ctypes
-import io
 import json
 import os
 import signal
@@ -30,6 +29,7 @@ from fdanyone.space.monitor import RunMonitor
 from fdanyone.space.previews import PreviewLoader
 from fdanyone.space.settings import complete_options
 from fdanyone.space.task import SavedTask, SpaceConfig, ensure_new_output, read_task, source_matches
+from fdanyone.space.viewer import read_result
 
 FINISHED = {"complete", "failed", "cancelled"}
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -127,27 +127,26 @@ def worker_process(command, **options):
     """
 
     if os.name != "nt":
-        options["stdin"] = subprocess.DEVNULL
-        options["start_new_session"] = os.name == "posix"
-        with subprocess.Popen(command, **options) as process:
+        with subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True, **options) as process:
             try:
                 yield process
             finally:
                 stop_process_group(process)
         return
 
-    options["stdin"] = subprocess.PIPE
-    options["start_new_session"] = False
-    options["creationflags"] = options.get("creationflags", 0) | subprocess.CREATE_NO_WINDOW
     job = _WindowsJob()
     try:
-        with subprocess.Popen([sys.executable, "-u", "-c", _WINDOWS_GATE, *command], **options) as process:
+        with subprocess.Popen(
+            [sys.executable, "-u", "-c", _WINDOWS_GATE, *command],
+            stdin=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            **options,
+        ) as process:
             assigned = False
             try:
                 job.assign(process.pid)
                 assigned = True
-                process._fdanyone_job = job
-                process.stdin.write("1" if isinstance(process.stdin, io.TextIOBase) else b"1")
+                process.stdin.write(b"1")
                 process.stdin.close()
                 process.stdin = None
                 yield process
@@ -161,17 +160,8 @@ def worker_process(command, **options):
 
 
 def stop_process_group(process: subprocess.Popen, grace_seconds: float = 3.0) -> None:
-    """Stop an owned worker and descendants, including after its parent exits."""
+    """Stop a POSIX worker session, including descendants that outlive their parent."""
 
-    if os.name == "nt":
-        process._fdanyone_job.close()
-        process.wait()
-        return
-    if os.name != "posix":
-        if process.poll() is None:
-            process.kill()
-        process.wait()
-        return
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -300,8 +290,7 @@ class JobManager:
         with self.lock:
             if self.closed:
                 raise ConfigurationError("Space is shutting down.")
-            current = self.current_job()
-            if current and current.state not in FINISHED:
+            if self.job and self.job.state not in FINISHED:
                 raise ConfigurationError("Inference is already running.")
             output_dir = resolve_output_path(self.config.output_dir)
             output_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -421,9 +410,6 @@ class JobManager:
             job.message = status["message"]
             job.monitor.status(status)
 
-    def _command(self, request: Path) -> list[str]:
-        return [sys.executable, "-u", "-m", "fdanyone.space.worker", str(request)]
-
     def _run(self, job: Job) -> None:
         try:
             job.check_cancelled()
@@ -438,7 +424,7 @@ class JobManager:
             environment.setdefault("OMP_NUM_THREADS", "8")
             with (job.directory / "inference.log").open("w", encoding="utf-8") as log:
                 with worker_process(
-                    self._command(request),
+                    [sys.executable, "-u", "-m", "fdanyone.space.worker", str(request)],
                     cwd=REPOSITORY,
                     env=environment,
                     stdout=log,
@@ -464,8 +450,6 @@ class JobManager:
                 else:
                     message = f"Inference exited with code {process.returncode}: {job.directory / 'inference.log'}"
                 raise FourDAnyoneError(message)
-            from fdanyone.space.viewer import read_result
-
             # Inference completes when its published result is valid. Scene
             # preparation belongs to PreviewLoader and cannot fail the run.
             read_result(job.output_dir)

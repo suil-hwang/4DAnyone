@@ -21,9 +21,10 @@ from fdanyone.space.controls import (
 )
 from fdanyone.space.gpus import available_gpus
 from fdanyone.space.help import option_label
-from fdanyone.space.settings import complete_options, layout_options, make_options, validate_options
+from fdanyone.space.settings import complete_options, layout_options, validate_options
 from fdanyone.space.source import ClipTiming
 from fdanyone.space.task import SavedTask, SpaceConfig
+from fdanyone.video import validate_clip_options
 from fdanyone.views import MAX_PITCH, MIN_PITCH
 
 ATTENTION_LABELS = {
@@ -42,7 +43,7 @@ class InferenceForm:
         self.gpus = list(range(len(models)))
         self.gpu_description = describe_gpus({index: gpu_model(name) for index, name in enumerate(models)})
         timing = ClipTiming.read(config.video_path)
-        self.start_max = timing.start_max("auto") if timing else 0
+        self.start_max = timing.start_max() if timing else 0
         self.defaults = complete_options(
             dict(views_per_layer=6, gpu_ids=config.gpu_ids, attention_backend=config.attention_backend)
         )
@@ -176,24 +177,22 @@ class InferenceForm:
         return layout
 
     def options(self, values) -> dict:
+        """Translate the editable form into the CLI's inference arguments."""
         layout = self.layout(values, editable=True)
         validate_gpu_ids(values["gpu_ids"], len(self.gpus))
-        options = make_options(
-            str(self.config.video_path),
-            layout["views_per_layer"],
-            layout["layer_pitches"],
-            layout["start_yaw"],
-            layout["yaw_span"],
-            values["enable_turbo"],
-            min(values["start_time"], self.start_max),
-        )
-        options.update(
-            gpu_ids=None if values["gpu_ids"] == self.gpus else values["gpu_ids"],
-            target_fps="auto",
+        start_time = min(values["start_time"], self.start_max)
+        validate_clip_options(start_time=start_time, fps=None)
+        options = {
+            "video_path": str(self.config.video_path.resolve()),
+            **layout,
+            "enable_turbo": bool(values["enable_turbo"]),
+            "start_time": float(start_time),
+            "gpu_ids": None if values["gpu_ids"] == self.gpus else values["gpu_ids"],
+            "target_fps": "auto",
             **{name: values[name] for name in ("enable_rcp", "enable_tcr", "attention_backend")},
-            model_dir=str(self.config.model_dir),
-            gvhmr_root=str(self.config.gvhmr_root),
-        )
+            "model_dir": str(self.config.model_dir),
+            "gvhmr_root": str(self.config.gvhmr_root),
+        }
         validate_options(options)
         return options
 

@@ -16,8 +16,8 @@ import gradio_rerun
 
 from fdanyone.errors import FourDAnyoneError
 
-VERSION = "0.37.1"
-WASM_SHA256 = "a5119572793205c35f682546b30882152fd3e2869b24c82226f852dfa6db7fe3"
+VERSION = "0.38.1"
+WASM_SHA256 = "a508e26c91f8370720d04a2fd8a2e7b1d2513df0c35461657fe5fe2f62cee37b"
 ASSETS = Path(__file__).with_name("assets")
 _LOCK = threading.Lock()
 

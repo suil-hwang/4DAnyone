@@ -17,14 +17,15 @@ from fdanyone.assets import SMPLX_MODEL, resolve_regressor
 from fdanyone.errors import FourDAnyoneError
 
 
+def file_identity(path: Path | None):
+    if path is None or not path.is_file():
+        return None
+    stat = path.stat()
+    return str(path.resolve()), stat.st_size, stat.st_mtime_ns
+
+
 def body_cache_identity(motion_dir, model_dir, gvhmr_root, regressor_path=None):
     """Use the same geometry inputs for body, recording and overlay caches."""
-    def identity(path):
-        if path is None or not path.is_file():
-            return None
-        stat = path.stat()
-        return str(path.resolve()), stat.st_size, stat.st_mtime_ns
-
     files = [motion_dir / name for name in ("motion.json", "motion.safetensors")]
     if model_dir is not None:
         files.extend([model_dir / SMPLX_MODEL, resolve_regressor(regressor_path, model_dir)])
@@ -38,7 +39,7 @@ def body_cache_identity(motion_dir, model_dir, gvhmr_root, regressor_path=None):
             "hmr4d/utils/geo_transform.py",
             "hmr4d/utils/smplx_utils.py",
         ))
-    return [2, str(gvhmr_root.resolve()) if gvhmr_root else None, [identity(path) for path in files]]
+    return [2, str(gvhmr_root.resolve()) if gvhmr_root else None, [file_identity(path) for path in files]]
 
 
 def source_transforms(points_incam: np.ndarray, points_world: np.ndarray) -> np.ndarray:

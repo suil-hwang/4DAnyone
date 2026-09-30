@@ -63,6 +63,8 @@ def resolve_task(video_path: str | Path | None, output_dir: str | Path | None) -
     if source is not None:
         ensure_new_output(destination)
         ensure_example_video(source)
+    elif read_run_request(destination) is None:
+        raise ConfigurationError(f"No saved task in {destination}; pass --video_path to start one.")
     return source, destination
 
 
@@ -79,7 +81,9 @@ def source_matches(source: Path, identity: dict, cache_dir: Path) -> bool:
         digest = sha256_file(source)
         if source.stat().st_mtime_ns != stat.st_mtime_ns:
             return False
-        write_json(cached, {"sha256": digest})
+        # The hash cache only saves time; failing to store it must not change the answer.
+        with suppress(OSError):
+            write_json(cached, {"sha256": digest})
         return digest == identity["sha256"]
     except (OSError, KeyError):
         return False

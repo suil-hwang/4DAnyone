@@ -1,11 +1,13 @@
-"""Run 4DAnyone inference from a monocular video."""
-
+# inference.py
 from __future__ import annotations
 
 import sys
 
+from fire import Fire
+
 from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, normalize_attention_backend
 from fdanyone.device import configure_inference_cuda_allocator, has_low_memory_gpu
+from fdanyone.pipeline import run_pipeline
 
 
 def inference(
@@ -65,8 +67,6 @@ def inference(
     normalize_attention_backend(attention_backend)
     low_memory = has_low_memory_gpu(gpu_ids)
     configure_inference_cuda_allocator(use_expandable_segments=low_memory)
-    # Keep model imports out of module scope so ``--help`` stays lightweight.
-    from fdanyone.pipeline import run_pipeline
 
     return run_pipeline(
         video_path=video_path,
@@ -91,11 +91,6 @@ def inference(
 
 
 def main() -> None:
-    """Bootstrap the CLI without importing Fire or PyTorch at module import."""
-
-    configure_inference_cuda_allocator()
-    from fire import Fire
-
     try:
         Fire(inference)
     except Exception as exc:

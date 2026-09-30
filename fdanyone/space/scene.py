@@ -51,10 +51,7 @@ def log_cameras(recording, cameras, *, videos=(), fps=None, frames=121) -> None:
                 static=True,
             )
             log_video(recording, f"{entity}/image", video, fps, frames)
-    _log_camera_frames(
-        recording,
-        [(camera, (camera["image_width"], camera["image_height"]), bool(videos)) for camera in cameras],
-    )
+    _log_camera_frames(recording, cameras, has_video=bool(videos))
     recording.log(
         "world/labels",
         rr.Points3D(
@@ -97,7 +94,7 @@ def blueprint(context: dict, count: int):
     )
 
 
-def _log_camera_frames(recording, frames: list) -> None:
+def _log_camera_frames(recording, cameras, *, has_video: bool) -> None:
     """Batch static rig geometry so repaint cost does not grow by entity per camera."""
     import rerun as rr
 
@@ -105,9 +102,9 @@ def _log_camera_frames(recording, frames: list) -> None:
     # Only display geometry lives here, so clearing it never masks video frames.
     recording.log(entity, rr.Clear(recursive=True), static=True)
     lines, fills, bezels = [], [], []
-    for camera, size, has_video in frames:
-        width, height = size
-        outline, bezel, faces = _rounded_frame(width, height, min(size) * 0.075, min(size) * 0.02)
+    for camera in cameras:
+        width, height = camera["image_width"], camera["image_height"]
+        outline, bezel, faces = _rounded_frame(width, height, min(width, height) * 0.075, min(width, height) * 0.02)
         transform = np.asarray(camera["camera_to_world"])
         origin = transform[:3, 3]
         projection = np.linalg.inv(camera["K"]).T @ transform[:3, :3].T * CAMERA_PLANE_DISTANCE

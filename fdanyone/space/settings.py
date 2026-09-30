@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-from pathlib import Path
 
 from fdanyone.errors import ConfigurationError
 from fdanyone.video import validate_clip_options
@@ -40,18 +39,6 @@ def validate_options(options: dict) -> None:
     )
     fps = options["target_fps"]
     validate_clip_options(start_time=options["start_time"], fps=None if str(fps).lower() == "auto" else fps)
-
-
-def make_options(video, views, pitches, start_yaw, yaw_span, turbo, start_time) -> dict:
-    """Translate the editable Space form into the CLI's inference arguments."""
-
-    validate_clip_options(start_time=start_time, fps=None)
-    return {
-        "video_path": str(Path(video).resolve()),
-        **layout_options(views, pitches, start_yaw, yaw_span),
-        "enable_turbo": bool(turbo),
-        "start_time": float(start_time),
-    }
 
 
 def layout_options(views, pitches, start_yaw, yaw_span) -> dict:

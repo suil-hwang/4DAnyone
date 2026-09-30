@@ -1,11 +1,10 @@
-"""Launch 4DAnyone Space in the inference environment."""
-
+# app.py
 from __future__ import annotations
 
-import atexit
 import os
 import signal
 import sys
+from contextlib import closing
 
 from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, normalize_attention_backend
 from fdanyone.errors import ConfigurationError, FourDAnyoneError
@@ -55,34 +54,19 @@ def launch(
         attention_backend=attention_backend,
         video_path=video_path,
     )
-    _serve(config, server_name=server_name, server_port=server_port)
-
-
-def _serve(config: SpaceConfig, *, server_name: str, server_port: int) -> None:
-    cache_dir = config.cache_dir
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    config.cache_dir.mkdir(parents=True, exist_ok=True)
     # Gradio's shared /tmp/gradio may belong to another user on a GPU host.
     # Set this before importing Gradio, which initializes its upload cache.
-    os.environ.setdefault("GRADIO_TEMP_DIR", str(cache_dir / "gradio"))
-    try:
-        from fdanyone.space.jobs import JobManager
-        from fdanyone.space.theme import CSS, THEME
-        from fdanyone.space.ui import build_space
-    except ImportError as exc:
-        raise SystemExit(
-            f"GUI dependency unavailable: {exc}. Create the environment from environment.yml."
-        ) from exc
-    manager = JobManager(config)
-    atexit.register(manager.close)
+    os.environ.setdefault("GRADIO_TEMP_DIR", str(config.cache_dir / "gradio"))
+    from fdanyone.space.jobs import JobManager
+    from fdanyone.space.theme import CSS, THEME
+    from fdanyone.space.ui import build_space
 
-    def shutdown(_signum, _frame):
-        raise SystemExit(0)
-
-    previous_sigterm = signal.signal(signal.SIGTERM, shutdown)
-    try:
+    with closing(JobManager(config)) as manager:
+        # SIGTERM unwinds like Ctrl+C, so closing the manager also stops a running inference.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         print(f"Output Directory: {config.output_dir}", flush=True)
-        space = build_space(manager)
-        space.queue(default_concurrency_limit=8, max_size=32).launch(
+        build_space(manager).queue(default_concurrency_limit=8, max_size=32).launch(
             server_name=server_name,
             server_port=server_port,
             ssr_mode=False,
@@ -92,9 +76,6 @@ def _serve(config: SpaceConfig, *, server_name: str, server_port: int) -> None:
             max_file_size="500mb",
             show_error=True,
         )
-    finally:
-        manager.close()
-        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 def main() -> None:
