@@ -6,6 +6,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import torch
+from safetensors.torch import load_file
+
 from fdanyone.errors import AssetError
 
 if TYPE_CHECKING:
@@ -42,8 +45,6 @@ def validate_turbo_base_metadata(base_metadata: Mapping[str, str] | None) -> Non
 
 
 def _fuse_low_rank_delta(state_dict: Mapping[str, Tensor], adapter: Mapping[str, Tensor], down_key: str) -> None:
-    import torch
-
     up_key = f"{down_key[: -len(_DOWN)]}{_UP}"
     target = f"{_stem(down_key, _DOWN)}.weight"
     base = state_dict[target]
@@ -56,8 +57,6 @@ def _fuse_low_rank_delta(state_dict: Mapping[str, Tensor], adapter: Mapping[str,
 
 
 def _fuse_direct_delta(state_dict: Mapping[str, Tensor], adapter: Mapping[str, Tensor], key: str) -> None:
-    import torch
-
     if key.endswith(_BIAS_DIFF):
         target = f"{_stem(key, _BIAS_DIFF)}.bias"
     elif key.endswith(_TENSOR_DIFF):
@@ -87,9 +86,6 @@ def fuse_turbo_lora(model: nn.Module, adapter_path: str | Path) -> None:
     state_dict = model.state_dict(keep_vars=True)
 
     path = Path(adapter_path).expanduser().resolve()
-
-    import torch
-    from safetensors.torch import load_file
 
     device = next(iter(state_dict.values())).device
     adapter = load_file(str(path), device=str(device))

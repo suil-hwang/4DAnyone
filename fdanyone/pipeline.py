@@ -1,13 +1,14 @@
-"""Top-level inference orchestration."""
-
+# fdanyone/pipeline.py
 from __future__ import annotations
 
+import importlib
 import logging
 import os
 import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from fdanyone.assets import (
@@ -17,29 +18,30 @@ from fdanyone.assets import (
     TURBO_LORA,
     TURBO_LORA_NAME,
     TURBO_LORA_SHA256,
+    ensure_example_video,
+    ensure_models,
+    ensure_smplx,
     resolve_base_assets,
     resolve_checkpoint,
     resolve_foreground_model,
     resolve_regressor,
     resolve_turbo_lora,
 )
+from fdanyone.attention import get_attention_backend
 from fdanyone.config import BASE24, INFERENCE, RANK64_DELTA4
 from fdanyone.device import CUDA_ALLOCATOR_CONF, select_cuda_devices
-from fdanyone.download import ensure_example_video, ensure_models, ensure_smplx
 from fdanyone.errors import ConfigurationError
 from fdanyone.io import remove_tree, resolve_output_path, write_json
 from fdanyone.motion.gvhmr import validate_gvhmr
 from fdanyone.motion.result import MotionResult
-from fdanyone.output import OutputDirectory, write_output
-from fdanyone.run_request import save_run_request
+from fdanyone.output import OutputDirectory, save_run_request, write_output
 from fdanyone.video import (
     decode_canonical_clip,
     validate_clip_options,
-    validate_required_video_codecs,
     verify_lossless_video,
     write_gvhmr_video,
 )
-from fdanyone.views import ViewPlan, resolve_view_plan
+from fdanyone.views import resolve_view_plan
 
 LOGGER = logging.getLogger("fdanyone")
 PROGRESS = logging.getLogger("fdanyone.progress")
@@ -47,132 +49,25 @@ PROGRESS.addHandler(logging.NullHandler())
 PROGRESS.propagate = False
 
 
-def _resolve_output_dir(output_dir: str | None, video_path: str) -> Path:
-    """Resolve the output directory without following its final path component."""
+def _run_worker(module: str, request_path: Path, request: dict) -> None:
+    """Run a short-lived GVHMR worker on this checkout with stable CUDA flags."""
 
-    target = Path("data/fdanyone") / Path(video_path).stem if output_dir is None else Path(output_dir)
-    return resolve_output_path(target)
-
-
-def _discard_scratch(path: Path) -> None:
-    """Best-effort cleanup that can never invalidate a published result.
-
-    Some network filesystems keep an open, hidden tombstone after a file is
-    unlinked.  Such a tombstone may remain ``EBUSY`` until this process exits,
-    so cleanup must not be part of the atomic publication transaction.
-    """
-
-    try:
-        remove_tree(path)
-    except OSError as exc:
-        LOGGER.warning(
-            "Could not remove temporary files at %s (%s). "
-            "The result is unaffected; the hidden scratch directory can be removed after this process exits.",
-            path,
-            exc,
-        )
-
-
-def _worker_environment() -> dict[str, str]:
-    """Give the short-lived GVHMR workers this checkout and stable CUDA flags."""
-
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "TORCH_CUDNN_V8_API_DISABLED": "1",
-            "CUDNN_FRONTEND_DISABLE": "1",
-            "CUDNN_LOGINFO_DBG": "0",
-            "CUDNN_LOGDEST_DBG": "stderr",
-            "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-            "NVIDIA_TF32_OVERRIDE": "0",
-        }
-    )
+    environment = {
+        **os.environ,
+        "TORCH_CUDNN_V8_API_DISABLED": "1",
+        "CUDNN_FRONTEND_DISABLE": "1",
+        "CUDNN_LOGINFO_DBG": "0",
+        "CUDNN_LOGDEST_DBG": "stderr",
+        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+        "NVIDIA_TF32_OVERRIDE": "0",
+        "PYTHONPATH": str(Path(__file__).resolve().parent.parent),
+    }
     environment.pop("PYTHONHOME", None)
-    # The 4 GiB split policy is specific to the long-lived DiT process. These
-    # short-lived preprocessing workers use unrelated allocation shapes.
+    # The 4 GiB allocator split is tuned for the DiT process, not these short-lived preprocessing workers.
     environment.pop(CUDA_ALLOCATOR_CONF, None)
-    environment["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
-    return environment
-
-
-def _run_motion(
-    *,
-    working_video: Path,
-    output_dir: Path,
-    gvhmr_root: Path,
-    device: str,
-    worker_python: str,
-    clip_metadata: Path,
-):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    request_path = output_dir / ".motion-worker-request.json"
-    result_dir = output_dir / "result"
-    write_json(
-        request_path,
-        {
-            "gvhmr_root": str(gvhmr_root),
-            "working_video": str(working_video),
-            "clip_metadata": str(clip_metadata),
-            "output_dir": str(output_dir / "runtime"),
-            "result_dir": str(result_dir),
-            "device": device,
-        },
-    )
-    try:
-        subprocess.run(
-            [worker_python, "-m", "fdanyone.motion.worker", str(request_path)],
-            check=True,
-            env=_worker_environment(),
-        )
-    finally:
-        request_path.unlink(missing_ok=True)
-    return MotionResult.load(result_dir)
-
-
-def _build_conditioning(
-    *,
-    working_video: Path,
-    clip_metadata: Path,
-    motion_result_dir: Path,
-    view_plan: ViewPlan,
-    output_dir: Path,
-    regressor: Path,
-    foreground_model: Path,
-    gvhmr_root: Path,
-    device: str,
-    worker_python: str,
-):
-    from fdanyone.skeleton.pipeline import Conditioning
-
-    request_path = output_dir.parent / ".skeleton-worker-request.json"
-    write_json(
-        request_path,
-        {
-            "working_video": str(working_video),
-            "clip_metadata": str(clip_metadata),
-            "motion_result_dir": str(motion_result_dir),
-            "regressor_path": str(regressor),
-            "foreground_model_path": str(foreground_model),
-            "gvhmr_root": str(gvhmr_root),
-            "output_dir": str(output_dir),
-            "device": device,
-            "view_plan": view_plan.to_dict(),
-        },
-    )
-    try:
-        subprocess.run(
-            [
-                worker_python,
-                "-m",
-                "fdanyone.skeleton.worker",
-                str(request_path),
-            ],
-            check=True,
-            env=_worker_environment(),
-        )
-    finally:
-        request_path.unlink(missing_ok=True)
-    return Conditioning.load(output_dir)
+    # The request lives in scratch, which run_pipeline removes with everything else.
+    write_json(request_path, request)
+    subprocess.run([os.path.abspath(sys.executable), "-m", module, str(request_path)], check=True, env=environment)
 
 
 def run_pipeline(
@@ -217,13 +112,11 @@ def run_pipeline(
         start_time=start_time,
         fps=None if str(target_fps).lower() == "auto" else target_fps,
     )
-    checkpoint = resolve_checkpoint(checkpoint_path, model_dir=model_dir) if checkpoint_path is not None else None
-    destination = _resolve_output_dir(output_dir, video_path)
     clip_name = Path(video_path).stem
+    destination = resolve_output_path(Path("data/fdanyone") / clip_name if output_dir is None else output_dir)
     output = OutputDirectory(destination)
     # Check before downloads and decoding, then again when locking the output.
     output.validate_available()
-    validate_required_video_codecs()
     devices = select_cuda_devices(gpu_ids)
     device = devices[0]
 
@@ -233,26 +126,26 @@ def run_pipeline(
     if len(select_worker_devices(devices, view_plan.num_groups)) > 1:
         require_nccl()
 
-    from fdanyone.model.dit import get_attention_backend
-
-    # Resolve once, before downloading assets or preparing conditioning. Every
-    # DiT, including spawned replicas, receives this concrete backend.
+    # Resolve once before any downloads; every DiT, replicas included, receives this concrete backend.
     attention_backend = get_attention_backend(attention_backend, device=device)
     LOGGER.info("Using attention backend: %s", attention_backend)
 
     PROGRESS.info("Preparing model assets", extra={"fraction": 0.05})
     ensure_example_video(video_path)
-    # Resolve the licensed body model before starting the much larger public
-    # model download. Interactive use continues automatically after setup;
-    # background jobs receive an actionable error instead of hanging.
+    # Licensed SMPL-X before the large model download: terminals install it interactively, background jobs fail fast.
     ensure_smplx(model_dir, gvhmr_root)
     ensure_models(model_dir, gvhmr_root)
     turbo_lora = resolve_turbo_lora(model_dir) if enable_turbo else None
     gvhmr_root, gvhmr_revision = validate_gvhmr(gvhmr_root)
-    worker_python = os.path.abspath(sys.executable)
 
-    if checkpoint is None:
-        checkpoint = resolve_checkpoint(model_dir=model_dir)
+    checkpoint = resolve_checkpoint(checkpoint_path, model_dir=model_dir)
+    # Only the published checkpoint claims the frozen Hugging Face identity; a local override does not.
+    if checkpoint_path is None:
+        model_identity = {"checkpoint": CHECKPOINT, "repo_id": HF_REPO_ID, "revision": HF_REVISION}
+    else:
+        model_identity = {"checkpoint": checkpoint.name, "source": "local_override"}
+    if turbo_lora is not None:
+        model_identity["turbo_lora"] = {"name": TURBO_LORA_NAME, "file": TURBO_LORA, "sha256": TURBO_LORA_SHA256}
     base_assets = resolve_base_assets(model_dir)
     regressor = resolve_regressor(mhr70_regressor_path, model_dir=model_dir)
     foreground_model = resolve_foreground_model(model_dir)
@@ -272,61 +165,62 @@ def run_pipeline(
 
         with output.stage() as work:
             PROGRESS.info("Recovering human motion with GVHMR", extra={"fraction": 0.15})
-            if output.motion_dir.exists():
+            reuse_motion = output.motion_dir.exists()
+            if reuse_motion:
                 LOGGER.info("Reusing GVHMR motion from %s", output.motion_dir)
                 motion = MotionResult.load(output.motion_dir)
             else:
                 save_run_request(destination, request_options)
-                motion = _run_motion(
-                    working_video=working_video,
-                    output_dir=scratch / "gvhmr",
-                    gvhmr_root=gvhmr_root,
-                    device=device,
-                    worker_python=worker_python,
-                    clip_metadata=clip_metadata,
+                motion_scratch = scratch / "gvhmr"
+                _run_worker(
+                    "fdanyone.motion.worker",
+                    motion_scratch / ".motion-worker-request.json",
+                    {
+                        "gvhmr_root": str(gvhmr_root),
+                        "working_video": str(working_video),
+                        "clip_metadata": str(clip_metadata),
+                        "output_dir": str(motion_scratch / "runtime"),
+                        "result_dir": str(motion_scratch / "result"),
+                        "device": device,
+                    },
                 )
+                motion = MotionResult.load(motion_scratch / "result")
             if motion.gvhmr_revision != gvhmr_revision:
                 raise ConfigurationError("GVHMR revision mismatch; use a new output directory.")
             motion.validate_against_clip(clip)
-            if output.motion_dir.exists():
+            if reuse_motion:
                 save_run_request(destination, request_options)
             else:
                 output.save_motion(motion)
 
-            # Record the published identity only for the published checkpoint; an
-            # explicit override must not claim the frozen Hugging Face coordinates.
-            if checkpoint_path is None:
-                model_identity = {"checkpoint": CHECKPOINT, "repo_id": HF_REPO_ID, "revision": HF_REVISION}
-            else:
-                model_identity = {"checkpoint": checkpoint.name, "source": "local_override"}
-            if turbo_lora is not None:
-                model_identity["turbo_lora"] = {
-                    "name": TURBO_LORA_NAME,
-                    "file": TURBO_LORA,
-                    "sha256": TURBO_LORA_SHA256,
-                }
-
-            # Heavy rendering and generation are imported only after the motion
-            # contract has been materialized, keeping CLI/help and CPU tests light.
-            from fdanyone.model.inference import generate_views
-
             PROGRESS.info("Building foreground masks and skeletons", extra={"fraction": 0.30})
-            conditioning = _build_conditioning(
-                working_video=working_video,
-                clip_metadata=clip_metadata,
-                motion_result_dir=output.motion_dir,
-                view_plan=view_plan,
-                output_dir=scratch / "conditioning",
-                regressor=regressor,
-                foreground_model=foreground_model,
-                gvhmr_root=gvhmr_root,
-                device=device,
-                worker_python=worker_python,
-            )
+            conditioning_scratch = scratch / "conditioning"
+            # Import the ~5 s generation stack only once motion is ready, overlapping the skeleton worker.
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                generation_import = executor.submit(importlib.import_module, "fdanyone.model.inference")
+                _run_worker(
+                    "fdanyone.skeleton.worker",
+                    scratch / ".skeleton-worker-request.json",
+                    {
+                        "working_video": str(working_video),
+                        "clip_metadata": str(clip_metadata),
+                        "motion_result_dir": str(output.motion_dir),
+                        "regressor_path": str(regressor),
+                        "foreground_model_path": str(foreground_model),
+                        "gvhmr_root": str(gvhmr_root),
+                        "output_dir": str(conditioning_scratch),
+                        "device": device,
+                        "view_plan": view_plan.to_dict(),
+                    },
+                )
+                generation_import.result()
+            from fdanyone.model.inference import generate_views
+            from fdanyone.skeleton.pipeline import Conditioning
+
+            conditioning = Conditioning.load(conditioning_scratch)
             # Re-decode the worker-produced source before it becomes a model tensor.
             verify_lossless_video(clip, conditioning.source_video)
-            # Generation reads the verified working video. Only lightweight
-            # provenance is needed from the original full-resolution clip now.
+            # Generation reads the verified working video; keep only the full-resolution clip's provenance.
             clip_info = clip.info
             del clip
             PROGRESS.info("Generating target-view videos", extra={"fraction": 0.45})
@@ -352,7 +246,14 @@ def run_pipeline(
                 pipeline_started=pipeline_started,
             )
     finally:
-        _discard_scratch(scratch)
+        # Best effort: network filesystems may hold unlinked files busy (EBUSY) until this process exits.
+        remove_tree(scratch, ignore_errors=True)
+        if scratch.exists():
+            LOGGER.warning(
+                "Could not remove temporary files at %s. "
+                "The result is unaffected; the hidden scratch directory can be removed after this process exits.",
+                scratch,
+            )
     summary["output_dir"] = str(destination)
     PROGRESS.info("Inference complete", extra={"fraction": 1.0})
     return summary

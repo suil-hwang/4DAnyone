@@ -20,7 +20,13 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
 from fdanyone.errors import ConfigurationError
+from fdanyone.model.denoise import denoise_group
+from fdanyone.model.loader import load_denoiser
 from fdanyone.model.routing import CameraGroup, Routes, StepGroups
 
 if TYPE_CHECKING:
@@ -79,8 +85,6 @@ def select_worker_devices(devices: Sequence[str], num_groups: int) -> tuple[str,
 def require_nccl() -> None:
     """Reject unsupported distributed denoising before preparing worker inputs."""
 
-    import torch.distributed as dist
-
     if not (dist.is_available() and dist.is_nccl_available()):
         raise ConfigurationError("Multi-GPU denoising requires NCCL; use one GPU on Windows.")
 
@@ -108,8 +112,6 @@ def _resolve_empty_workspace(path: str | Path) -> Path:
 
 def _write_pose_feature_file(pose_features: PoseFeatureBank, path: Path) -> tuple[int, ...]:
     """Write precomputed target pose features to a worker-shared BF16 tensor."""
-
-    import torch
 
     features = pose_features.features
     shape = tuple(features.shape)
@@ -148,9 +150,6 @@ class _WorkerState:
         return len(self.request.devices)
 
     def _scatter_latents(self, wave: StepGroups) -> Tensor:
-        import torch
-        import torch.distributed as dist
-
         local_input = torch.empty(
             (self.pose_feature_batch.shape[0], *self.latent_tail),
             dtype=self.denoiser.dtype,
@@ -166,12 +165,8 @@ class _WorkerState:
         return local_input
 
     def _denoise_local_group(self, local_input: Tensor, wave: StepGroups, step_index: int) -> Tensor:
-        import torch
-
         if self.rank >= len(wave):
             return torch.zeros_like(local_input)
-
-        from fdanyone.model.denoise import denoise_group
 
         group = wave[self.rank]
         for output_index, camera_id in enumerate(group):
@@ -188,9 +183,6 @@ class _WorkerState:
             )
 
     def _gather_and_commit(self, local_result: Tensor, wave: StepGroups) -> None:
-        import torch
-        import torch.distributed as dist
-
         gathered = [torch.empty_like(local_result) for _ in range(self.world_size)] if self.is_primary else None
         dist.gather(local_result, gather_list=gathered, dst=0)
         if not self.is_primary:
@@ -201,8 +193,6 @@ class _WorkerState:
 
     def denoise(self) -> None:
         """Run every route step, committing a complete step before TCR moves on."""
-
-        import torch.distributed as dist
 
         for step_index, groups in enumerate(self.request.routes):
             for wave in group_waves(groups, self.world_size):
@@ -216,8 +206,6 @@ class _WorkerState:
 
 
 def _load_worker_state(rank: int, request: DistributedDenoiseRequest, denoiser: Denoiser) -> _WorkerState:
-    import torch
-
     device = request.devices[rank]
     payload = torch.load(
         Path(request.work_dir) / "inputs.pt",
@@ -253,8 +241,6 @@ def _load_worker_state(rank: int, request: DistributedDenoiseRequest, denoiser: 
 
 
 def _publish_worker_result(state: _WorkerState, report: WorkerReport) -> None:
-    import torch
-
     root = Path(state.request.work_dir)
     if state.is_primary:
         temporary = root / ".target_latents.pt.tmp"
@@ -265,11 +251,6 @@ def _publish_worker_result(state: _WorkerState, report: WorkerReport) -> None:
 
 def _worker(rank: int, request: DistributedDenoiseRequest) -> None:
     """Run one NCCL rank. Rank zero owns and publishes the canonical latents."""
-
-    import torch
-    import torch.distributed as dist
-
-    from fdanyone.model.loader import load_denoiser
 
     logging.basicConfig(
         level=logging.INFO,
@@ -340,9 +321,6 @@ def denoise_targets_distributed(
     devices: Sequence[str],
 ) -> tuple[Tensor, list[WorkerReport]]:
     """Prepare shared inputs, launch NCCL workers, and return canonical latents."""
-
-    import torch
-    import torch.multiprocessing as mp
 
     devices = tuple(devices)
     require_nccl()

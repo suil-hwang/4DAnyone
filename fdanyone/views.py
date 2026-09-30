@@ -1,5 +1,4 @@
-"""Resolve the reader-facing target-view layout and inference grouping."""
-
+# fdanyone/views.py
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -66,7 +65,7 @@ class ViewPlan:
 
     @property
     def front_camera_ids(self) -> tuple[int, ...]:
-        return tuple(view.camera_id for view in self.target_views if abs(view.yaw % 360.0) < 1e-8)
+        return tuple(view.camera_id for view in self.target_views if view.yaw % 360.0 < 1e-8)
 
     @property
     def rcp_camera_ids(self) -> tuple[int, ...]:
@@ -115,20 +114,17 @@ def resolve_view_plan(
     """Validate the compact CLI settings before expensive work starts."""
 
     views_per_layer = index(views_per_layer)
-    if views_per_layer <= 0:
-        raise ConfigurationError(f"views_per_layer must be positive: {views_per_layer}.")
     pitches = tuple(map(index, layer_pitches))
-    if not pitches or len(set(pitches)) != len(pitches):
-        raise ConfigurationError(f"layer_pitches must be non-empty and distinct: {pitches}.")
-    if any(not MIN_PITCH <= pitch <= MAX_PITCH for pitch in pitches):
-        raise ConfigurationError(f"Layer pitches outside [{MIN_PITCH}, {MAX_PITCH}]: {pitches}.")
+    if len(set(pitches)) != len(pitches) or any(not MIN_PITCH <= pitch <= MAX_PITCH for pitch in pitches):
+        raise ConfigurationError(f"layer_pitches must be distinct and within [{MIN_PITCH}, {MAX_PITCH}]: {pitches}.")
     start_yaw = (index(start_yaw) + 180) % 360 - 180
     yaw_span = index(yaw_span)
     if not 0 < yaw_span <= 360:
         raise ConfigurationError(f"yaw_span must be in [1, 360]: {yaw_span}.")
     total_views = views_per_layer * len(pitches)
-    if total_views % VIEWS_PER_GROUP:
-        raise ConfigurationError(f"Target view count must be divisible by {VIEWS_PER_GROUP}: {total_views}.")
+    # Also rejects views_per_layer <= 0 and empty layer_pitches.
+    if total_views <= 0 or total_views % VIEWS_PER_GROUP:
+        raise ConfigurationError(f"Target view count must be a positive multiple of {VIEWS_PER_GROUP}: {total_views}.")
     if not isinstance(enable_rcp, bool) or not isinstance(enable_tcr, bool):
         raise ConfigurationError("enable_rcp and enable_tcr must be booleans.")
 

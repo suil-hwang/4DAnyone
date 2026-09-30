@@ -11,6 +11,9 @@ import uuid
 from pathlib import Path
 from urllib.parse import quote
 
+import gradio as gr
+import gradio_rerun
+
 from fdanyone.errors import FourDAnyoneError
 
 VERSION = "0.37.1"
@@ -50,9 +53,6 @@ def _cache_modules(directory: Path) -> Path:
 
 
 def prepare_web_assets(cache_dir: Path) -> dict:
-    import gradio as gr
-    import gradio_rerun
-
     directory = cache_dir / "web-viewer" / VERSION
     destination = directory / "re_viewer_bg.wasm"
     with _LOCK:

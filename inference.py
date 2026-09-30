@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, validate_attention_backend
+from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, normalize_attention_backend
 from fdanyone.device import configure_inference_cuda_allocator, has_low_memory_gpu
 
 
@@ -62,7 +62,7 @@ def inference(
 
     # This must run before the first model/PyTorch import. It protects the
     # reusable 5--6 GiB DiT FFN allocation from allocator fragmentation.
-    validate_attention_backend(attention_backend)
+    normalize_attention_backend(attention_backend)
     low_memory = has_low_memory_gpu(gpu_ids)
     configure_inference_cuda_allocator(use_expandable_segments=low_memory)
     # Keep model imports out of module scope so ``--help`` stays lightweight.

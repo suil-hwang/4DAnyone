@@ -19,9 +19,12 @@ import numpy as np
 from fdanyone.config import FRAMING
 from fdanyone.errors import FourDAnyoneError
 from fdanyone.geometry.cameras import camera_grid, reference_intrinsics
-from fdanyone.output import read_output_metadata
-from fdanyone.result_videos import read_target_videos
+from fdanyone.output import read_output_metadata, read_target_videos
 from fdanyone.space import scene
+from fdanyone.space.body import body_cache_identity, load_body
+from fdanyone.space.overlay import export_overlay
+from fdanyone.space.source import prepare_source
+from fdanyone.video import validate_clip_options
 
 _EXPORT_LOCK = threading.Lock()
 RECORDING_VERSION = 17
@@ -131,8 +134,6 @@ def _cache_key(identity) -> str:
 
 
 def _body_identity(motion_dir, model_dir, gvhmr_root, regressor_path=None):
-    from fdanyone.space.body import body_cache_identity
-
     if motion_dir is None:
         return None
     return body_cache_identity(motion_dir, model_dir, gvhmr_root, regressor_path)
@@ -214,8 +215,6 @@ def _save_recording(destination: Path, info: dict, log_scene) -> Path:
 
 
 def _prepare_body(motion_dir, model_dir, gvhmr_root, cache_dir, check_cancelled, regressor_path=None):
-    from fdanyone.space.body import load_body
-
     if motion_dir is None:
         return None, []
     if model_dir is None or gvhmr_root is None:
@@ -238,9 +237,6 @@ def export_recording(
     regressor_path: Path | None = None,
     check_cancelled: Callable = lambda: None,
 ) -> Path:
-    from fdanyone.space.overlay import export_overlay
-    from fdanyone.space.source import prepare_source
-
     body_identity = _body_identity(result.directory / "gvhmr", model_dir, gvhmr_root, regressor_path)
     identity = [
         RECORDING_VERSION,
@@ -328,10 +324,6 @@ def export_input(
     regressor_path: Path | None = None,
     check_cancelled: Callable = lambda: None,
 ) -> Path:
-    from fdanyone.space.overlay import export_overlay
-    from fdanyone.space.source import prepare_source
-    from fdanyone.video import validate_clip_options
-
     rate = validate_clip_options(start_time=start_time, fps=None if str(target_fps).lower() == "auto" else target_fps)
     body_identity = _body_identity(motion_dir, model_dir, gvhmr_root, regressor_path)
     key = _cache_key(

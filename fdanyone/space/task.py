@@ -12,11 +12,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from fdanyone.assets import ensure_example_video
 from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, normalize_attention_backend
-from fdanyone.download import ensure_example_video
 from fdanyone.errors import ConfigurationError, FourDAnyoneError
 from fdanyone.io import resolve_output_path, sha256_file, write_json
-from fdanyone.run_request import read_run_request
+from fdanyone.output import read_run_request
 from fdanyone.space.settings import complete_options, validate_options
 from fdanyone.space.viewer import read_result
 

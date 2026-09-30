@@ -10,7 +10,7 @@ def main() -> None:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from fire import Fire
 
-    from fdanyone.download import download_smplx
+    from fdanyone.assets import download_smplx
     from fdanyone.errors import FourDAnyoneError
 
     try:

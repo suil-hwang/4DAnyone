@@ -16,6 +16,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, TypedDict
 
+import torch
+from tqdm.auto import tqdm
+
 from fdanyone.assets import BaseAssets
 from fdanyone.config import INFERENCE, DenoisingProfile
 from fdanyone.errors import FourDAnyoneError
@@ -92,8 +95,6 @@ class _GenerationPlan:
 
 
 def _empty_cuda_cache() -> None:
-    import torch
-
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -102,15 +103,11 @@ def _empty_cuda_cache() -> None:
 def _bf16_autocast():
     """Match Lightning's ``bf16-mixed`` inference context without Lightning."""
 
-    import torch
-
     return torch.autocast(device_type="cuda", dtype=torch.bfloat16)
 
 
 def _channels_last_source_layout(video):
     """Preserve the frozen source tensor's VFHWC-backed VCFHW layout."""
-
-    import torch
 
     return video.contiguous(memory_format=torch.channels_last_3d)
 
@@ -119,8 +116,6 @@ def _validate_denoised_latents(
     latents: Tensor, *, stage: str, attention_backend: str
 ) -> None:
     """Reject non-finite CPU results before reference reuse or target decoding."""
-
-    import torch
 
     if not torch.isfinite(latents).all().item():
         recovery = (
@@ -142,8 +137,6 @@ def _noise(
     seed: int,
     device: str,
 ) -> Tensor:
-    import torch
-
     shape = (
         num_views,
         vae.latent_channels,
@@ -168,9 +161,6 @@ def _denoise_rcp(
     seed: int,
     device: str,
 ) -> Tensor:
-    import torch
-    from tqdm.auto import tqdm
-
     latents = _noise(
         vae=vae,
         num_views=len(camera_ids),
@@ -213,9 +203,6 @@ def _denoise_targets_single(
 ) -> Tensor:
     """Denoise view groups on the GPU while the full target state stays on the CPU."""
 
-    import torch
-    from tqdm.auto import tqdm
-
     num_views = initial_latents.shape[0]
     latents = initial_latents
     source = src_latents.to(dtype=denoiser.dtype, device=device)
@@ -249,8 +236,6 @@ def _resolve_generation_plan(
     conditioning: Conditioning,
     devices: tuple[str, ...],
 ) -> _GenerationPlan:
-    import torch
-
     view_plan = conditioning.view_plan
     primary_device = devices[0]
     primary_device_index = int(primary_device.removeprefix("cuda:"))
@@ -345,8 +330,6 @@ def generate_views(
     seed: int,
 ) -> GeneratedViews:
     """Generate proposal and target views with the pipeline's resolved backend."""
-
-    import torch
 
     plan = _resolve_generation_plan(
         conditioning=conditioning,

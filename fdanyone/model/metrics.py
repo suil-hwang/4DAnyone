@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 from contextlib import contextmanager
 
+import torch
+
 
 class GenerationMetrics:
     """Measure independent stages while preserving an end-to-end CUDA peak."""
@@ -17,8 +19,6 @@ class GenerationMetrics:
     @contextmanager
     def stage(self, name: str):
         """Measure one non-overlapping stage."""
-
-        import torch
 
         torch.cuda.synchronize(self.device_index)
         torch.cuda.reset_peak_memory_stats(self.device_index)

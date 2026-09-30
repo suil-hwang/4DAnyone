@@ -15,6 +15,7 @@ import torch
 from torch import Tensor
 
 from fdanyone.config import INFERENCE
+from fdanyone.model.loader import load_vae
 from fdanyone.video import write_video
 
 if TYPE_CHECKING:
@@ -33,8 +34,6 @@ class VaeExecutor:
 
     @classmethod
     def load(cls, path: str | Path, devices: tuple[str, ...]) -> VaeExecutor:
-        from fdanyone.model.loader import load_vae
-
         return cls(load_vae(path), devices)
 
     @property

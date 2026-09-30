@@ -6,6 +6,7 @@ import inspect
 from pathlib import Path
 
 from fdanyone.errors import ConfigurationError
+from fdanyone.video import validate_clip_options
 from fdanyone.views import resolve_view_plan
 
 
@@ -22,8 +23,6 @@ def complete_options(options: dict) -> dict:
 
 def validate_options(options: dict) -> None:
     """Apply the CLI camera grouping and clip contracts before submission."""
-
-    from fdanyone.video import validate_clip_options
 
     options = complete_options(options)
     resolve_view_plan(
@@ -45,7 +44,6 @@ def validate_options(options: dict) -> None:
 
 def make_options(video, views, pitches, start_yaw, yaw_span, turbo, start_time) -> dict:
     """Translate the editable Space form into the CLI's inference arguments."""
-    from fdanyone.video import validate_clip_options
 
     validate_clip_options(start_time=start_time, fps=None)
     return {

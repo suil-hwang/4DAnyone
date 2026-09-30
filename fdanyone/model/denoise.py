@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import torch
+
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -20,8 +22,6 @@ def denoise_group(
     step_index: int,
 ) -> Tensor:
     """Advance one camera group by one scheduler step."""
-
-    import torch
 
     timestep = denoiser.timesteps[step_index]
     batched_timestep = timestep.unsqueeze(0).to(dtype=denoiser.dtype, device=latents.device)

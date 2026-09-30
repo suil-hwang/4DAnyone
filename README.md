@@ -28,15 +28,14 @@ git clone https://github.com/ant-research/4DAnyone.git
 cd 4DAnyone
 git submodule update --init third_party/GVHMR
 
-conda create -n 4danyone python=3.11 -y
-conda activate 4danyone
-pip install -r requirements.txt
+conda env create -f environment.yml
+conda activate 4DAnyone
 pip install sageattention==2.2.0 --no-build-isolation
 ```
 
-[SageAttention2++](https://github.com/thu-ml/SageAttention) (`sage2pp`) is the default attention backend. The command above follows the [official installation guide](https://github.com/thu-ml/SageAttention/tree/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5#installation) and requires CUDA 12.8 or newer and a compatible compiler when building from source. Native Windows users can use `environment.yml`; source builds need MSVC-compatible settings, or a CUDA-extension wheel matching their Python, PyTorch, CUDA and GPU architecture.
+[SageAttention2++](https://github.com/thu-ml/SageAttention) (`sage2pp`) is the default attention backend. The command above follows the [official installation guide](https://github.com/thu-ml/SageAttention/tree/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5#installation) and requires CUDA 12.8 or newer and a compatible compiler when building from source. On native Windows, source builds need MSVC-compatible settings, or a CUDA-extension wheel matching their Python, PyTorch, CUDA and GPU architecture.
 
-For a single 96 GB RTX PRO 6000 Blackwell, select `--gpu_ids '[0]'` and use the default `sage2pp` backend. To run without the compiled extension, use `--attention_backend sdpa`, or `--attention_backend auto` to prefer SageAttention2++ and fall back to SDPA. The legacy name `sageattention` is accepted as an alias for `sage2pp`; SageAttention 1.x is not used. Base requirements and the Conda environment do not install an older SageAttention package.
+For a single 96 GB RTX PRO 6000 Blackwell, select `--gpu_ids '[0]'` and use the default `sage2pp` backend. To run without the compiled extension, use `--attention_backend sdpa`, or `--attention_backend auto` to prefer SageAttention2++ and fall back to SDPA. The legacy name `sageattention` is accepted as an alias for `sage2pp`; SageAttention 1.x is not used. The Conda environment does not install an older SageAttention package.
 
 SageAttention2++ uses approximate INT8/FP8 attention. Its upstream FP8 quantizer can produce NaNs for an all-zero V channel; the pipeline checks denoised latents before using them as references or decoding videos and stops if they contain nonfinite values. Use `--attention_backend sdpa` if this occurs. `auto` falls back for backend availability, not for numerical failures during inference.
 
@@ -140,11 +139,7 @@ We provide a Gradio space for interactive inference and visualization. It is bui
 
 <p align="center"><img src="docs/assets/space-viewer.gif" width="100%" alt="4DAnyone GUI viewer"></p>
 
-Install the GUI packages in the `4danyone` environment:
-
-```bash
-pip install -r requirements-gui.txt
-```
+The GUI packages (Gradio and Rerun) are included in `environment.yml`.
 
 Pass an existing output directory to view inference results:
 
@@ -172,8 +167,6 @@ ssh -N -L 7860:127.0.0.1:7860 user@gpu-host
 https://github.com/user-attachments/assets/a51ec078-2970-4a37-9061-104211e1618d
 
 ## Reconstruction
-
-For 3DGS reconstruction, see the [nerfstudio guide](docs/nerfstudio.md).
 
 We will integrate an open-source 4DGS reconstruction method. Stay tuned!
 

@@ -1,9 +1,4 @@
-"""Fixed model and preprocessing settings used by the released method.
-
-Only reader-useful choices live in the CLI. These values describe the trained
-model and therefore stay together here instead of being exposed as knobs.
-"""
-
+# fdanyone/config.py
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,5 +1,4 @@
-"""Write and publish inference results while retaining reusable motion on failure."""
-
+# fdanyone/output.py
 from __future__ import annotations
 
 import json
@@ -11,15 +10,20 @@ import shutil
 import sys
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fdanyone.config import INFERENCE
 from fdanyone.device import CUDA_ALLOCATOR_CONF
-from fdanyone.errors import ConfigurationError
-from fdanyone.io import lock_output, remove_tree, resolve_output_path
-from fdanyone.result_videos import target_video_path
-from fdanyone.run_request import REQUEST_FILE, read_run_request
+from fdanyone.errors import ConfigurationError, FourDAnyoneError
+from fdanyone.io import (
+    lock_output,
+    remove_tree,
+    resolve_output_path,
+    sha256_file,
+    write_json,
+)
 
 if TYPE_CHECKING:
     from fdanyone.model.inference import GeneratedViews
@@ -28,15 +32,11 @@ if TYPE_CHECKING:
     from fdanyone.video import ClipInfo
 
 LOGGER = logging.getLogger("fdanyone")
+REQUEST_FILE = ".4danyone-request.json"
+REQUEST_VERSION = 2
 _GENERATED = ("cameras.json", "skeletons", "videos", "metadata.json")
 _DIRECTORIES = {"gvhmr", "skeletons", "videos", ".inference"}
 _REQUEST_TEMPORARY = re.compile(rf"\.{re.escape(REQUEST_FILE)}\.[0-9a-f]{{32}}\.tmp")
-
-
-def read_output_metadata(directory: str | Path) -> dict:
-    """Require the final commit marker before any reader consumes the output."""
-
-    return json.loads((Path(directory) / "metadata.json").read_text())
 
 
 class OutputDirectory:
@@ -129,6 +129,54 @@ class OutputDirectory:
                 remove_tree(self.working)
             except OSError as exc:
                 LOGGER.warning("Output is complete, but staging cleanup failed at %s: %s", self.working, exc)
+
+
+def read_run_request(directory: str | Path) -> dict | None:
+    """Read a request in the current format without changing its arguments."""
+
+    path = Path(directory) / REQUEST_FILE
+    if not path.exists() and not path.is_symlink():
+        return None
+    value = json.loads(path.read_text())
+    if value["version"] != REQUEST_VERSION:
+        raise ConfigurationError(f"Unsupported request version {value['version']}: {path}.")
+    return value
+
+
+def save_run_request(directory: str | Path, options: dict, **fields) -> dict:
+    """Call while reserving the output; never place orchestration files in staging."""
+
+    directory = Path(directory)
+    previous = read_run_request(directory) or {}
+    source = Path(options["video_path"]).resolve()
+    stat = source.stat()
+    identity = {"path": str(source), "filename": source.name, "size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    old_source = previous.get("source", {})
+    identity["sha256"] = (
+        old_source["sha256"]
+        if old_source.get("sha256") and all(old_source.get(key) == value for key, value in identity.items())
+        else sha256_file(source)
+    )
+    options = dict(options)
+    for key in ("model_dir", "gvhmr_root", "checkpoint_path", "mhr70_regressor_path"):
+        if options.get(key):
+            options[key] = str(Path(options[key]).expanduser().resolve())
+    value = {
+        **previous,
+        "version": REQUEST_VERSION,
+        "created_at": previous.get("created_at", datetime.now(timezone.utc).isoformat()),
+        "options": {**options, "video_path": str(source), "output_dir": str(directory.resolve())},
+        "source": identity,
+        **fields,
+    }
+    write_json(directory / REQUEST_FILE, value)
+    return value
+
+
+def target_video_path(camera_id: int) -> Path:
+    """Return the relative publication path for a target camera."""
+
+    return Path("videos") / f"{camera_id:02d}.mp4"
 
 
 def write_output(
@@ -278,3 +326,29 @@ def write_output(
         "peak_vram_reserved_bytes": generated.peak_vram_reserved_bytes,
         "total_pipeline_elapsed_seconds": total_elapsed,
     }
+
+
+def read_output_metadata(directory: str | Path) -> dict:
+    """Require the final commit marker before any reader consumes the output."""
+
+    return json.loads((Path(directory) / "metadata.json").read_text())
+
+
+def read_target_videos(root: Path, cameras: list[dict]) -> tuple[Path, ...]:
+    """Read the canonical camera-indexed videos, contained within the result."""
+
+    if not cameras or [camera.get("camera_id") for camera in cameras] != list(range(len(cameras))):
+        raise FourDAnyoneError("Camera IDs must be consecutive and ordered.")
+    layout = tuple(target_video_path(index) for index in range(len(cameras)))
+    if any(
+        not isinstance(camera.get("video"), str) or camera["video"].replace("\\", "/") != path.as_posix()
+        for camera, path in zip(cameras, layout, strict=True)
+    ):
+        raise FourDAnyoneError("Video paths must match videos/<camera_id>.mp4.")
+
+    root = root.resolve()
+    paths = tuple(root / relative for relative in layout)
+    for path in paths:
+        if not path.is_file() or not path.resolve().is_relative_to(root):
+            raise FourDAnyoneError(f"Missing or external result file: {path.relative_to(root)}")
+    return paths

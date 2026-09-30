@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import ctypes
 import io
 import json
 import os
@@ -13,13 +14,18 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager, suppress
+from ctypes import wintypes
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from fdanyone.errors import ConfigurationError, FourDAnyoneError
 from fdanyone.io import lock_output, remove_tree, resolve_output_path, sha256_file
-from fdanyone.output import OutputDirectory
-from fdanyone.run_request import REQUEST_FILE, read_run_request, save_run_request
+from fdanyone.output import (
+    REQUEST_FILE,
+    OutputDirectory,
+    read_run_request,
+    save_run_request,
+)
 from fdanyone.space.monitor import RunMonitor
 from fdanyone.space.previews import PreviewLoader
 from fdanyone.space.settings import complete_options
@@ -44,9 +50,6 @@ class _WindowsJob:
     """A non-inheritable Job Object whose last handle owns all descendants."""
 
     def __init__(self) -> None:
-        import ctypes
-        from ctypes import wintypes
-
         class BasicLimits(ctypes.Structure):
             _fields_ = [
                 ("PerProcessUserTimeLimit", ctypes.c_longlong),
@@ -99,8 +102,6 @@ class _WindowsJob:
             raise error
 
     def assign(self, pid: int) -> None:
-        import ctypes
-
         # PROCESS_SET_QUOTA | PROCESS_TERMINATE, as required by assignment.
         process_handle = self.api.OpenProcess(0x0100 | 0x0001, False, pid)
         if not process_handle:

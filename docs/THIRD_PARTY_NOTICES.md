@@ -81,12 +81,3 @@ The frozen base-model assets come from the official [Wan2.2-TI2V-5B](https://hug
 The MHR70 asset is a sanitized inference artifact containing only the sparse support/weight tensors, keypoint names, and a path-free structural schema. The first-party regression tensors are redistributed under Apache-2.0. The embedded name/order metadata remains covered by the schema notice above.
 
 That regressor was trained by the 4DAnyone project on DNA-Rendering frames, using outputs from [SAM 3D Body](https://github.com/facebookresearch/sam-3d-body) and the [Momentum Human Rig](https://github.com/facebookresearch/MHR) conversion tools. SAM 3D Body is governed by the SAM License, MHR source is Apache-2.0, and DNA-Rendering access requires a separate signed dataset agreement. The regressor is not bundled in the source repository. Its Hugging Face model card must retain these source-model and dataset citations alongside the split tensor/schema license declaration in this notice.
-
-## VGG-19 perceptual reconstruction
-
-- Loss reference: [Crowdsampling the Plenoptic Function](https://github.com/zhengqili/Crowdsampling-the-Plenoptic-Function/tree/f5216f312cf82d77f8d20454b5eeb3930324630a), released under MIT in its upstream README
-- VGG-19 model: [Oxford Visual Geometry Group](https://www.robots.ox.ac.uk/~vgg/research/very_deep/)
-- MatConvNet distribution: [imagenet-vgg-verydeep-19](https://www.vlfeat.org/matconvnet/pretrained/), source MD5 `106118b7cf60435e6d8e04f6a6dc3657`
-- Model license: [Creative Commons Attribution 4.0 International](https://creativecommons.org/licenses/by/4.0/)
-
-The optional `splatfacto-perceptual` method uses a custom pixel-plus-feature objective rather than standard LPIPS. The companion Hugging Face repository contains a modified copy of the VGG-19 model: MatConvNet filters are transposed into PyTorch layout and serialized as safetensors, while the unused classifier and final two convolution layers are omitted. The retained tensor values are otherwise unchanged. Credit remains with Karen Simonyan and Andrew Zisserman. Users must preserve that attribution and the CC BY 4.0 license when redistributing the converted weights.

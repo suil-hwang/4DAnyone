@@ -11,6 +11,9 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
+import torch
+import torchvision.transforms.functional as transform
+from torchvision.transforms import InterpolationMode
 
 from fdanyone.assets import BIREFNET_REPO_ID, BIREFNET_REVISION
 from fdanyone.config import CAMERA, CROP, FOREGROUND, INFERENCE, SKELETON, CameraConfig
@@ -63,8 +66,6 @@ class Conditioning:
         return _video_tensor(self.source_video, self.num_frames, crop=self.source_crop)
 
     def load_skeleton_tensor(self, skeletons: Iterable[SkeletonVideo]):
-        import torch
-
         videos = [_video_tensor(item.path, self.num_frames, crop=item.crop) for item in skeletons]
         return torch.cat(videos, dim=0)
 
@@ -112,10 +113,6 @@ class _BodyGeometry:
 
 
 def _video_tensor(path: Path, num_frames: int, *, crop: Crop | None = None):
-    import torch
-    import torchvision.transforms.functional as transform
-    from torchvision.transforms import InterpolationMode
-
     output_frames = []
     for frame in iter_rgb_video(path):
         tensor = torch.from_numpy(frame).permute(2, 0, 1)
@@ -168,8 +165,6 @@ def _safe_regressor_metadata(support_shape: tuple[int, ...]) -> dict[str, int | 
 
 
 def _load_regressor(path: Path, device):
-    import torch
-
     data = torch.load(path, map_location="cpu", weights_only=True)
     support = data["support_vertex_ids"].detach().long().to(device)
     weights = data["weights"].detach().float().to(device)
@@ -189,8 +184,6 @@ def _body_geometry(
     *,
     include_mesh: bool = False,
 ) -> _BodyGeometry:
-    import torch
-
     utility_root = gvhmr_root / "hmr4d/utils/body_model"
     smplx_to_smpl_path = utility_root / "smplx2smpl_sparse.pt"
     joint_regressor_path = utility_root / "smpl_neutral_J_regressor.pt"

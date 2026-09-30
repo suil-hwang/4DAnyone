@@ -13,7 +13,7 @@ import av
 
 from fdanyone.config import INFERENCE
 from fdanyone.errors import FourDAnyoneError
-from fdanyone.video import _decode_frames, _rotation_degrees, _stream_rate, choose_canonical_fps, validate_clip_options
+from fdanyone.video import decode_frames, stream_rate, choose_canonical_fps, validate_clip_options
 
 
 def _remux_source(source, destination, *, fps, indices, start_time, check_cancelled):
@@ -21,17 +21,20 @@ def _remux_source(source, destination, *, fps, indices, start_time, check_cancel
 
     if start_time or (indices is not None and list(indices) != list(range(INFERENCE.num_frames))):
         return None
+    # Rotation exists only as per-frame display-matrix side data; remuxing would drop it.
+    with av.open(str(source)) as probe:
+        if next(probe.decode(video=0)).rotation:
+            return None
     with av.open(str(source)) as container:
         video = container.streams.video[0]
-        rate = Fraction(fps or choose_canonical_fps(_stream_rate(video)))
+        rate = Fraction(fps or choose_canonical_fps(stream_rate(video)))
         codec = video.codec_context
         if (
             codec.name != "h264"
             or codec.format is None
             or codec.format.name != "yuv420p"
             or video.frames != INFERENCE.num_frames
-            or _stream_rate(video) != rate
-            or _rotation_degrees(video)
+            or stream_rate(video) != rate
             or video.width % 2
             or video.height % 2
         ):
@@ -75,7 +78,7 @@ def prepare_source(
     source = source.resolve()
     if fps is None:
         with av.open(str(source)) as container:
-            fps = choose_canonical_fps(_stream_rate(container.streams.video[0]))
+            fps = choose_canonical_fps(stream_rate(container.streams.video[0]))
     fps = Fraction(fps)
     stat = source.stat()
     identity = [1, str(source), stat.st_size, stat.st_mtime_ns, float(start_time), str(fps)]
@@ -128,8 +131,8 @@ def encode_source(
             av.open(str(temporary), "w", options={"movflags": "+faststart"}) as output,
         ):
             video = container.streams.video[0]
-            fps = fps or choose_canonical_fps(_stream_rate(video))
-            frames = iter(_decode_frames(container, video, _rotation_degrees(video)))
+            fps = fps or choose_canonical_fps(stream_rate(video))
+            frames = iter(decode_frames(container, video))
             previous = next(frames)
             height, width = previous.rgb.shape[:2]
             size = max(2, round(width / 2) * 2), max(2, round(height / 2) * 2)

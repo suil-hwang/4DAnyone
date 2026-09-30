@@ -1,5 +1,4 @@
-"""Project-specific errors with actionable user-facing messages."""
-
+# fdanyone/errors.py
 
 class FourDAnyoneError(RuntimeError):
     """Base class for expected pipeline failures."""

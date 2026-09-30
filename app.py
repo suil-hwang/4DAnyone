@@ -7,7 +7,7 @@ import os
 import signal
 import sys
 
-from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, validate_attention_backend
+from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, normalize_attention_backend
 from fdanyone.errors import ConfigurationError, FourDAnyoneError
 from fdanyone.space.task import SpaceConfig, repository_path, resolve_task
 
@@ -42,7 +42,7 @@ def launch(
         server_name: Server bind address.
         server_port: Server port, from 1 to 65535.
     """
-    validate_attention_backend(attention_backend)
+    normalize_attention_backend(attention_backend)
     if isinstance(server_port, bool) or not isinstance(server_port, int) or not 1 <= server_port <= 65535:
         raise ConfigurationError("server_port must be an integer from 1 to 65535.")
     video_path, output_dir = resolve_task(video_path, output_dir)
@@ -70,7 +70,7 @@ def _serve(config: SpaceConfig, *, server_name: str, server_port: int) -> None:
         from fdanyone.space.ui import build_space
     except ImportError as exc:
         raise SystemExit(
-            f"GUI dependency unavailable: {exc}. Install requirements.txt and requirements-gui.txt."
+            f"GUI dependency unavailable: {exc}. Create the environment from environment.yml."
         ) from exc
     manager = JobManager(config)
     atexit.register(manager.close)

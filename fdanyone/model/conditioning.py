@@ -12,9 +12,11 @@ from threading import Event
 from typing import TYPE_CHECKING
 
 import torch
+from safetensors.torch import load_file
 from torch import Tensor
 
 from fdanyone.errors import FourDAnyoneError
+from fdanyone.model.loader import load_pose_encoder
 from fdanyone.views import VIEWS_PER_GROUP
 
 if TYPE_CHECKING:
@@ -28,8 +30,6 @@ POSE_ENCODER_BATCH_LIMIT = 6
 
 def load_prompt_context(path: str | Path):
     """Load the frozen UMT5 output consumed by the DiT."""
-
-    from safetensors.torch import load_file
 
     return load_file(str(Path(path).expanduser().resolve()), device="cpu")["context"].contiguous()
 
@@ -187,8 +187,6 @@ def build_pose_feature_cache(
     devices: tuple[str, ...],
 ) -> PoseFeatureCache:
     """Encode all fixed-shape pose jobs on an ordered CUDA device pool."""
-
-    from fdanyone.model.loader import load_pose_encoder
 
     view_plan = conditioning.view_plan
 

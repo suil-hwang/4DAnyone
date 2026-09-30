@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import torch
+from safetensors import safe_open
+
 from fdanyone.config import DenoisingProfile
+from fdanyone.model.dit import MODEL_DIM, NUM_HEADS, FourDAnyoneDiT, precompute_freqs_cis_3d
+from fdanyone.model.pose_encoder import PoseEncoder
+from fdanyone.model.turbo_lora import fuse_turbo_lora, validate_turbo_base_metadata
 
 if TYPE_CHECKING:
     import torch
@@ -31,8 +37,6 @@ class Denoiser:
 
         self.model.to(device=device, dtype=self.dtype)
         if self.turbo_lora_path is not None and not self.turbo_lora_applied:
-            from fdanyone.model.turbo_lora import fuse_turbo_lora
-
             fuse_turbo_lora(self.model, self.turbo_lora_path)
             self.turbo_lora_applied = True
 
@@ -43,8 +47,6 @@ def _load_checkpoint(
     include_prefix: str | None = None,
     exclude_prefixes: tuple[str, ...] = (),
 ):
-    from safetensors import safe_open
-
     with safe_open(str(path), framework="pt", device="cpu") as checkpoint:
         checkpoint_keys = checkpoint.keys()
         keys = (
@@ -60,15 +62,6 @@ def _load_checkpoint(
 
 
 def _load_dit(checkpoint_path: Path, attention_backend: str):
-    import torch
-
-    from fdanyone.model.dit import (
-        MODEL_DIM,
-        NUM_HEADS,
-        FourDAnyoneDiT,
-        precompute_freqs_cis_3d,
-    )
-
     with torch.device("meta"):
         dit = FourDAnyoneDiT(attention_backend=attention_backend)
     state_dict, metadata = _load_checkpoint(checkpoint_path, exclude_prefixes=(POSE_ENCODER_PREFIX,))
@@ -83,11 +76,6 @@ def _load_dit(checkpoint_path: Path, attention_backend: str):
 def load_pose_encoder(checkpoint_path: str | Path, device: str):
     """Load only the small pose encoder partition from the DiT checkpoint."""
 
-    import torch
-
-    from fdanyone.model.dit import MODEL_DIM
-    from fdanyone.model.pose_encoder import PoseEncoder
-
     checkpoint, _ = _load_checkpoint(Path(checkpoint_path), include_prefix=POSE_ENCODER_PREFIX)
     state_dict = {key.removeprefix(POSE_ENCODER_PREFIX): value for key, value in checkpoint.items()}
     del checkpoint
@@ -99,8 +87,6 @@ def load_pose_encoder(checkpoint_path: str | Path, device: str):
 
 
 def _load_vae(path: Path, dtype):
-    import torch
-
     from diffsynth.models.wan_video_vae import WanVideoVAE38
 
     state_dict = torch.load(path, map_location="cpu", weights_only=True)
@@ -115,8 +101,6 @@ def _load_vae(path: Path, dtype):
 def load_vae(path: str | Path):
     """Load the frozen Wan VAE as an independent generation stage."""
 
-    import torch
-
     return _load_vae(Path(path), torch.bfloat16)
 
 
@@ -129,15 +113,11 @@ def load_denoiser(
 ) -> Denoiser:
     """Load one DiT and configure its denoising trajectory."""
 
-    import torch
-
     dtype = torch.bfloat16
     checkpoint = Path(checkpoint_path).expanduser().resolve()
     turbo_path = None if turbo_lora_path is None else Path(turbo_lora_path).expanduser().resolve()
     model, metadata = _load_dit(checkpoint, attention_backend)
     if turbo_path is not None:
-        from fdanyone.model.turbo_lora import validate_turbo_base_metadata
-
         validate_turbo_base_metadata(metadata)
     # Include the zero endpoint; indexed deltas can be reused across stages and groups.
     sigmas = torch.linspace(profile.denoising_strength, 0.0, profile.num_inference_steps + 1)

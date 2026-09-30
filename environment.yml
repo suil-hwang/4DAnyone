@@ -7,7 +7,6 @@ dependencies:
   - cuda-version=12.8
   - pytorch-gpu
   - torchvision
-  - av
   - ffmpeg=*=gpl*
   - colorlog
   - einops
@@ -30,10 +29,12 @@ dependencies:
   - typing_extensions
   - ultralytics=8.4.163
   - yacs
+  # GUI: 6.21-6.26 remount custom components; keep rerun-sdk and gradio-rerun on the same version.
   - gradio=6.20.0
   - rerun-sdk=0.37.1
   - pip
   - pip:
+      - av==19.0.0
       - diffsynth==2.1.8
       - triton-windows==3.8.0.post28; sys_platform == "win32"
       - lapx
