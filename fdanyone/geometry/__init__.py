@@ -1,1 +1,1 @@
-"""Camera, crop, rotation, and point geometry."""
+# fdanyone/geometry/__init__.py

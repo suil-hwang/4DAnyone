@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
@@ -117,7 +118,7 @@ def _video_tensor(path: Path, num_frames: int, *, crop: Crop | None = None):
 
     output_frames = []
     for frame in iter_rgb_video(path):
-        tensor = torch.from_numpy(frame).permute(2, 0, 1).float().div_(255.0)
+        tensor = torch.from_numpy(frame).permute(2, 0, 1)
         if crop is not None:
             height, width = tensor.shape[-2:]
             scaled = _scale_crop(
@@ -126,6 +127,8 @@ def _video_tensor(path: Path, num_frames: int, *, crop: Crop | None = None):
                 scale_x=width / crop.original_width,
             )
             tensor = transform.crop(tensor, scaled.top, scaled.left, scaled.height, scaled.width)
+        tensor = tensor.float().div_(255.0)
+        if crop is not None:
             if tensor.shape[-2:] != (crop.output_height, crop.output_width):
                 tensor = transform.resize(
                     tensor,
@@ -138,6 +141,22 @@ def _video_tensor(path: Path, num_frames: int, *, crop: Crop | None = None):
     if len(output_frames) != num_frames:
         raise FourDAnyoneError(f"{path}: {len(output_frames)} frames; expected {num_frames}.")
     return torch.stack(output_frames, dim=1).unsqueeze(0).contiguous()
+
+
+def _conditioning_source_video(
+    clip: CanonicalClip, root: Path, canonical_source_video: str | Path | None
+) -> Path:
+    """Reuse the verified canonical MP4 across the conditioning worker boundary."""
+
+    if canonical_source_video is None:
+        return write_lossless_video(clip, root / "source.mkv")
+    source = Path(canonical_source_video).expanduser().resolve()
+    destination = root / "source.mp4"
+    try:
+        destination.hardlink_to(source)
+    except OSError:
+        shutil.copyfile(source, destination)
+    return destination
 
 
 def _safe_regressor_metadata(support_shape: tuple[int, ...]) -> dict[str, int | str]:
@@ -302,6 +321,7 @@ def build_skeleton_conditioning(
     output_dir: str | Path,
     device: str,
     view_plan: ViewPlan,
+    canonical_source_video: str | Path | None = None,
 ) -> Conditioning:
     """Build source, RCP, and target conditioning on one camera grid."""
 
@@ -395,7 +415,7 @@ def build_skeleton_conditioning(
         allow_upscale=CROP.allow_upscale,
     )
     target_crop = center_crop(clip.height, clip.width, INFERENCE.height, INFERENCE.width)
-    source_video = write_lossless_video(clip, root / "source.mkv")
+    source_video = _conditioning_source_video(clip, root, canonical_source_video)
     skeleton_root = root / "goliath40"
     skeleton_root.mkdir()
     skeleton_height, skeleton_width = _output_skeleton_shape(clip.height, clip.width)

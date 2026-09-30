@@ -7,7 +7,7 @@ import os
 import signal
 import sys
 
-from fdanyone.attention import validate_attention_backend
+from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, validate_attention_backend
 from fdanyone.errors import ConfigurationError, FourDAnyoneError
 from fdanyone.space.task import SpaceConfig, repository_path, resolve_task
 
@@ -19,7 +19,7 @@ def launch(
     gvhmr_root: str = "third_party/GVHMR",
     cache_dir: str = "outputs/space",
     gpu_ids: list[int] | None = None,
-    attention_backend: str = "sageattention",
+    attention_backend: str = DEFAULT_ATTENTION_BACKEND,
     server_name: str = "127.0.0.1",
     server_port: int = 7860,
 ) -> None:
@@ -36,7 +36,9 @@ def launch(
         cache_dir: Logs, body geometry, and scene recordings.
         gpu_ids: Initially selected GPU IDs, e.g. [0] or [0,1].
             Omit to select all CUDA-visible GPUs, as in the CLI.
-        attention_backend: sageattention (default), sdpa, or auto.
+        attention_backend: sage2pp (default), sdpa, or auto.
+            auto prefers SageAttention2++ and falls back to SDPA when unavailable.
+            sageattention is a compatibility alias for sage2pp.
         server_name: Server bind address.
         server_port: Server port, from 1 to 65535.
     """

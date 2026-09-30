@@ -6,6 +6,7 @@ import html
 
 import gradio as gr
 
+from fdanyone.attention import normalize_attention_backend
 from fdanyone.device import validate_gpu_ids
 from fdanyone.space.controls import (
     MAX_LAYERS,
@@ -26,10 +27,12 @@ from fdanyone.space.task import SavedTask, SpaceConfig
 from fdanyone.views import MAX_PITCH, MIN_PITCH
 
 ATTENTION_LABELS = {
+    "sage2pp": "SageAttention2++",
     "sageattention": "SageAttention",
     "sdpa": "SDPA",
     "auto": "Auto",
 }
+ATTENTION_CHOICES = [(label, value) for value, label in ATTENTION_LABELS.items() if value != "sageattention"]
 
 
 class InferenceForm:
@@ -109,8 +112,8 @@ class InferenceForm:
                 with gr.Row(elem_classes="option-row"):
                     gr.HTML(option_label("Attention"), min_width=0)
                     self.fields["attention_backend"] = gr.Dropdown(
-                        [(label, value) for value, label in ATTENTION_LABELS.items()],
-                        value=self.config.attention_backend,
+                        ATTENTION_CHOICES,
+                        value=normalize_attention_backend(self.config.attention_backend),
                         label="Attention",
                         show_label=False,
                         min_width=0,
@@ -159,6 +162,7 @@ class InferenceForm:
         options = task.options if task else self.defaults
         return {
             **{name: options[name] for name in self.fields},
+            "attention_backend": normalize_attention_backend(options["attention_backend"]),
             "gpu_ids": list(self.gpus if options["gpu_ids"] is None else options["gpu_ids"]),
         }
 
@@ -223,6 +227,7 @@ class InferenceForm:
             }
             for name, component in self.fields.items()
         }
+        props["attention_backend"]["value"] = normalize_attention_backend(values["attention_backend"])
         props["start_time"].update(
             maximum=max(self.start_max, values["start_time"]),
             interactive=interactive and self.start_max > 0,

@@ -237,7 +237,7 @@ def run_pipeline(
 
     # Resolve once, before downloading assets or preparing conditioning. Every
     # DiT, including spawned replicas, receives this concrete backend.
-    attention_backend = get_attention_backend(attention_backend)
+    attention_backend = get_attention_backend(attention_backend, device=device)
     LOGGER.info("Using attention backend: %s", attention_backend)
 
     PROGRESS.info("Preparing model assets", extra={"fraction": 0.05})

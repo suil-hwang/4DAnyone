@@ -16,14 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 
-from fdanyone.attention import resolve_attention_backend
-
-try:
-    from sageattention import sageattn
-
-    SAGE_ATTN_AVAILABLE = True
-except (ImportError, OSError, RuntimeError):
-    SAGE_ATTN_AVAILABLE = False
+from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, attention_hnd, get_attention_backend
 
 
 LATENT_CHANNELS = 48
@@ -50,23 +43,13 @@ RMS_NORM_FP32_TEMPORARY_BUDGET_BYTES = 1536 * 1024**2
 NORM_MODULATION_FP32_TEMPORARY_BUDGET_BYTES = 1536 * 1024**2
 
 
-def get_attention_backend(backend: str = "sageattention") -> str:
-    """Resolve a requested backend against the installed implementations."""
-
-    availability = {
-        "sageattention": SAGE_ATTN_AVAILABLE,
-        "sdpa": True,
-    }
-    return resolve_attention_backend(backend, availability)
-
-
 def attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, num_heads: int, backend: str) -> torch.Tensor:
     """Evaluate attention with the owning model's resolved backend."""
 
     q = rearrange(q, "b s (n d) -> b n s d", n=num_heads)
     k = rearrange(k, "b s (n d) -> b n s d", n=num_heads)
     v = rearrange(v, "b s (n d) -> b n s d", n=num_heads)
-    output = sageattn(q, k, v) if backend == "sageattention" else F.scaled_dot_product_attention(q, k, v)
+    output = attention_hnd(q, k, v, backend)
     return rearrange(output, "b n s d -> b s (n d)", n=num_heads)
 
 
@@ -422,7 +405,7 @@ class ViewPackEmbedding(nn.Module):
 class FourDAnyoneDiT(nn.Module):
     """Exact immutable inference graph for the released model checkpoint."""
 
-    def __init__(self, *, attention_backend: str = "sageattention") -> None:
+    def __init__(self, *, attention_backend: str = DEFAULT_ATTENTION_BACKEND) -> None:
         super().__init__()
         self.attention_backend = get_attention_backend(attention_backend)
         self.patch_embedding = nn.Conv3d(

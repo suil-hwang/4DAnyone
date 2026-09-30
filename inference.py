@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from fdanyone.attention import validate_attention_backend
+from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, validate_attention_backend
 from fdanyone.device import configure_inference_cuda_allocator, has_low_memory_gpu
 
 
@@ -23,7 +23,7 @@ def inference(
     mhr70_regressor_path: str | None = None,
     gvhmr_root: str = "third_party/GVHMR",
     gpu_ids: list[int] | None = None,
-    attention_backend: str = "sageattention",
+    attention_backend: str = DEFAULT_ATTENTION_BACKEND,
     target_fps: str | int | float = "auto",
     start_time: float = 0.0,
     seed: int = 42,
@@ -51,8 +51,9 @@ def inference(
         gvhmr_root: Path to the GVHMR source checkout.
         gpu_ids: GPU IDs used for parallel pose/VAE view stages and target
             denoising. Omit to use all visible GPUs.
-        attention_backend: sageattention (default), sdpa, or auto.
-            auto prefers SageAttention and falls back to SDPA when unavailable.
+        attention_backend: sage2pp (default), sdpa, or auto.
+            auto prefers SageAttention2++ and falls back to SDPA when unavailable.
+            sageattention is a compatibility alias for sage2pp.
         target_fps: auto preserves the input clock unless it divides evenly
             to 24, 25, or 30 FPS; a positive number requests an explicit FPS.
         start_time: Clip start time on the input timeline, in seconds.

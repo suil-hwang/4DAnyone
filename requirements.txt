@@ -16,7 +16,6 @@ pillow>=10,<13
 pytorch-lightning>=2.3,<3
 roma==1.6.1
 safetensors>=0.5,<1
-sageattention==1.0.6
 scipy>=1.10,<2
 smplx==0.1.28
 timm==0.9.12

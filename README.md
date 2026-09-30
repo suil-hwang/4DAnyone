@@ -31,9 +31,14 @@ git submodule update --init third_party/GVHMR
 conda create -n 4danyone python=3.11 -y
 conda activate 4danyone
 pip install -r requirements.txt
+pip install sageattention==2.2.0 --no-build-isolation
 ```
 
-[SageAttention](https://github.com/thu-ml/SageAttention) is installed with the requirements and is the default attention backend. Use `--attention_backend sdpa` for PyTorch SDPA, or `--attention_backend auto` to prefer SageAttention and fall back to SDPA when it is unavailable. Native Windows users can install the supplied `environment.yml`, which includes `triton-windows` for SageAttention.
+[SageAttention2++](https://github.com/thu-ml/SageAttention) (`sage2pp`) is the default attention backend. The command above follows the [official installation guide](https://github.com/thu-ml/SageAttention/tree/d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5#installation) and requires CUDA 12.8 or newer and a compatible compiler when building from source. Native Windows users can use `environment.yml`; source builds need MSVC-compatible settings, or a CUDA-extension wheel matching their Python, PyTorch, CUDA and GPU architecture.
+
+For a single 96 GB RTX PRO 6000 Blackwell, select `--gpu_ids '[0]'` and use the default `sage2pp` backend. To run without the compiled extension, use `--attention_backend sdpa`, or `--attention_backend auto` to prefer SageAttention2++ and fall back to SDPA. The legacy name `sageattention` is accepted as an alias for `sage2pp`; SageAttention 1.x is not used. Base requirements and the Conda environment do not install an older SageAttention package.
+
+SageAttention2++ uses approximate INT8/FP8 attention. Its upstream FP8 quantizer can produce NaNs for an all-zero V channel; the pipeline checks denoised latents before using them as references or decoding videos and stops if they contain nonfinite values. Use `--attention_backend sdpa` if this occurs. `auto` falls back for backend availability, not for numerical failures during inference.
 
 Missing models and examples are downloaded automatically on first use. You can also download them manually:
 

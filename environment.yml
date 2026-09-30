@@ -35,7 +35,6 @@ dependencies:
   - pip
   - pip:
       - diffsynth==2.1.8
-      - sageattention==1.0.6
       - triton-windows==3.8.0.post28; sys_platform == "win32"
       - lapx
       - roma

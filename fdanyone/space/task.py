@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from fdanyone.attention import DEFAULT_ATTENTION_BACKEND, normalize_attention_backend
 from fdanyone.download import ensure_example_video
 from fdanyone.errors import ConfigurationError, FourDAnyoneError
 from fdanyone.io import resolve_output_path, sha256_file, write_json
@@ -29,8 +30,11 @@ class SpaceConfig:
     model_dir: Path
     gvhmr_root: Path
     gpu_ids: tuple[int, ...] | None = None
-    attention_backend: str = "sageattention"
+    attention_backend: str = DEFAULT_ATTENTION_BACKEND
     video_path: Path | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "attention_backend", normalize_attention_backend(self.attention_backend))
 
 
 def repository_path(value: str | Path) -> Path:

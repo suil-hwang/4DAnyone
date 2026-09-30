@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, TypedDict
 
 from fdanyone.assets import BaseAssets
 from fdanyone.config import INFERENCE, DenoisingProfile
+from fdanyone.errors import FourDAnyoneError
 from fdanyone.model.conditioning import (
     PoseFeatureBank,
     build_pose_feature_cache,
@@ -112,6 +113,25 @@ def _channels_last_source_layout(video):
     import torch
 
     return video.contiguous(memory_format=torch.channels_last_3d)
+
+
+def _validate_denoised_latents(
+    latents: Tensor, *, stage: str, attention_backend: str
+) -> None:
+    """Reject non-finite CPU results before reference reuse or target decoding."""
+
+    import torch
+
+    if not torch.isfinite(latents).all().item():
+        recovery = (
+            "Retry with attention_backend='sdpa'."
+            if attention_backend != "sdpa"
+            else "Check model weights and input data before retrying."
+        )
+        raise FourDAnyoneError(
+            f"{stage} produced NaN or infinite latent values with attention backend "
+            f"{attention_backend!r}. Generation stopped before target decoding. {recovery}"
+        )
 
 
 def _noise(
@@ -386,6 +406,9 @@ def generate_views(
                     seed=seed,
                     device=plan.primary_device,
                 )
+                _validate_denoised_latents(
+                    rcp_latents, stage="RCP denoising", attention_backend=attention_backend
+                )
                 # Target references use null pose features, not the RCP bank.
                 del rcp_pose_features
                 # Only single-GPU target generation reuses the parent's DiT.
@@ -439,6 +462,9 @@ def generate_views(
                 )
                 denoiser = None
                 _empty_cuda_cache()
+            _validate_denoised_latents(
+                target_latents, stage="Target denoising", attention_backend=attention_backend
+            )
             del initial_latents
 
         if parallelism is not None:

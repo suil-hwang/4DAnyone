@@ -27,6 +27,7 @@ def main(request_path: str) -> None:
         output_dir=request["output_dir"],
         device=device,
         view_plan=ViewPlan.from_dict(request["view_plan"]),
+        canonical_source_video=request["working_video"],
     )
 
 

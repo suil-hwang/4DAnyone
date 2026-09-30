@@ -146,7 +146,7 @@ def run_gvhmr(
         from hmr4d.utils.geo_transform import compute_cam_angvel
         from hmr4d.utils.net_utils import detach_to_cpu, moving_average_smooth
         from hmr4d.utils.preproc.tracker import Tracker
-        from hmr4d.utils.preproc.vitfeat_extractor import Extractor
+        from hmr4d.utils.preproc.vitfeat_extractor import Extractor, get_batch
         from hmr4d.utils.preproc.vitpose import VitPoseExtractor
         from hmr4d.utils.pylogger import Log, ch
         from hmr4d.utils.seq_utils import (
@@ -216,19 +216,29 @@ def run_gvhmr(
             bbx_xys = torch.load(paths.bbx, weights_only=True)["bbx_xys"]
             Log.info("[Preprocess] bbx from %s", paths.bbx)
 
-        if not Path(paths.vitpose).exists():
+        vitpose_cached = Path(paths.vitpose).exists()
+        features_cached = Path(paths.vit_features).exists()
+        cropped_images = cropped_bbx_xys = None
+        if not vitpose_cached or not features_cached:
+            # Both upstream extractors use the same normalized 256px crops.
+            # Preserve get_batch's returned boxes for ViTPose's image-space
+            # keypoints; the motion model still receives the original boxes.
+            cropped_images, cropped_bbx_xys = get_batch(str(working_video), bbx_xys)
+
+        if not vitpose_cached:
             extractor = VitPoseExtractor()
-            torch.save(extractor.extract(str(working_video), bbx_xys), paths.vitpose)
+            torch.save(extractor.extract(cropped_images, cropped_bbx_xys), paths.vitpose)
             del extractor
         else:
             Log.info("[Preprocess] vitpose from %s", paths.vitpose)
 
-        if not Path(paths.vit_features).exists():
+        if not features_cached:
             extractor = Extractor()
-            torch.save(extractor.extract_video_features(str(working_video), bbx_xys), paths.vit_features)
+            torch.save(extractor.extract_video_features(cropped_images, cropped_bbx_xys), paths.vit_features)
             del extractor
         else:
             Log.info("[Preprocess] vit_features from %s", paths.vit_features)
+        del cropped_images, cropped_bbx_xys
         Log.info("[Preprocess] End. Time elapsed: %.2fs", Log.time() - started)
 
         data = {
